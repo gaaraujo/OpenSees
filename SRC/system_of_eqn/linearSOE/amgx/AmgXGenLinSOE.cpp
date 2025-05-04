@@ -195,8 +195,12 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
 
     // Special case for BlockSize = 1 - treat as regular CSR format
     if (_BlockSize == 1) {
-        _AColIdxBlock.clear();
-        _ARowPtrBlock.clear();
+        // Reserve space for matrix A
+        _ARowPtrBlock.reserve(size + 1);
+        _AColIdxBlock.reserve(nnz);
+        _AValuesBlock.resize(nnz, 0.0);
+
+        // Fill in _ARowPtrBlock and _AColIdxBlock
         _ARowPtrBlock.push_back(0); // Start of first row
 
         for (int row = 0; row < size; ++row) {
@@ -209,85 +213,75 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             }
 
             const ID& theAdjacency = theVertex->getAdjacency();
-            std::vector<int> colIdx;
-            colIdx.reserve(theAdjacency.Size() + 1);
+            ID colIdx(0, theAdjacency.Size() + 1); // +1 for the diagonal
 
             // Add diagonal first
-            colIdx.push_back(theVertex->getTag());
+            colIdx.insert(theVertex->getTag());
 
-            // Add adjacency entries
+            // Add adjacency entries in order
             for (int j = 0; j < theAdjacency.Size(); ++j) {
-                colIdx.push_back(theAdjacency(j));
+                colIdx.insert(theAdjacency(j));
             }
 
-            // Sort and remove duplicates (in case diagonal == adjacency entry)
-            std::sort(colIdx.begin(), colIdx.end());
-            colIdx.erase(std::unique(colIdx.begin(), colIdx.end()), colIdx.end());
-
             // Append to global col index block
-            _AColIdxBlock.insert(_AColIdxBlock.end(), colIdx.begin(), colIdx.end());
+            for (int i = 0; i < colIdx.Size(); ++i) {
+                _AColIdxBlock.push_back(colIdx(i));
+            }
 
             // Update row pointer
             _ARowPtrBlock.push_back(_AColIdxBlock.size());
         }
-        
-        // Allocate _AValuesBlock
-        _AValuesBlock.resize(_AColIdxBlock.size(), 0.0); // if using same vector
-
     } else {
-        // Block size > 1 case - original block CSR code
+        // Block size > 1 -> block CSR format
         int numBlockRows = size / _BlockSize;
         int numBlockCols = size / _BlockSize;
         
         // Prepare block structure
         _ARowPtrBlock.resize(numBlockRows + 1, 0);
         std::vector<int> mask(numBlockCols, -1);
-        std::vector<std::vector<int>> colIdxPerBlockRow(numBlockRows);
+        std::vector<ID> colIdxPerBlockRow(numBlockRows);
 
         // Loop over vertices (rows), and their adjacency (columns)
         // Note: this assumes the graph is undirected
         VertexIter &theVertices = theGraph.getVertices();
-        Vertex* vertex = nullptr;
+        Vertex* theVertex = nullptr;
 
-        while ((vertex = theVertices()) != nullptr) {
-            int row = vertex->getTag();  // global scalar row index
+        while ((theVertex = theVertices()) != nullptr) {
+            int row = theVertex->getTag();  // global scalar row index
             int blockRow = row / _BlockSize;
 
-            const ID& adjacency = vertex->getAdjacency();  // connected columns
-            
+            const ID& theAdjacency = theVertex->getAdjacency();  // connected columns
+
             // Insert the diagonal block
             if (mask[blockRow] != blockRow) {
                 mask[blockRow] = blockRow;
-                colIdxPerBlockRow[blockRow].push_back(blockRow);
+                colIdxPerBlockRow[blockRow].insert(blockRow);
             }
 
             // Insert other adjacency blocks
-            for (int k = 0; k < adjacency.Size(); ++k) {
-                int col = adjacency(k);
-                if (col < 0 || col >= size) continue;
+            for (int k = 0; k < theAdjacency.Size(); ++k) {
+                int col = theAdjacency(k);
                 int blockCol = col / _BlockSize;
                 if (mask[blockCol] != blockRow) {
                     mask[blockCol] = blockRow;
-                    colIdxPerBlockRow[blockRow].push_back(blockCol);
+                    colIdxPerBlockRow[blockRow].insert(blockCol);
                 }
             }
         }
 
         // Finalize _ARowPtrBlock and sort
         for (int blockRow = 0; blockRow < numBlockRows; ++blockRow) {
-            std::sort(colIdxPerBlockRow[blockRow].begin(), colIdxPerBlockRow[blockRow].end());
-            _ARowPtrBlock[blockRow + 1] = _ARowPtrBlock[blockRow] + colIdxPerBlockRow[blockRow].size();
+            _ARowPtrBlock[blockRow + 1] = _ARowPtrBlock[blockRow] + colIdxPerBlockRow[blockRow].Size();
         }
 
         // Fill _AColIdxBlock and allocate _AValuesBlock
         int nnzBlock = _ARowPtrBlock[numBlockRows];
-        _AColIdxBlock.resize(nnzBlock);
-        _AValuesBlock.resize(nnzBlock * _BlockSize * _BlockSize, 0.0); // row-major block storage
+        _AColIdxBlock.reserve(nnzBlock);
+        _AValuesBlock.resize(nnzBlock * _BlockSize * _BlockSize, 0.0);
 
-        int idx = 0;
         for (int blockRow = 0; blockRow < numBlockRows; ++blockRow) {
-            for (int blockCol : colIdxPerBlockRow[blockRow]) {
-                _AColIdxBlock[idx++] = blockCol;
+            for (int blockCol = 0; blockCol < colIdxPerBlockRow[blockRow].Size(); ++blockCol) {
+                _AColIdxBlock.push_back(colIdxPerBlockRow[blockRow](blockCol));
             }
         }
     }
@@ -326,7 +320,7 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     int size = _X.Size();
 
-    if (_BlockSize > 1) {
+    if (_BlockSize > 1) { // Block CSR format
         if (fact == 1.0) { // Do not need to multiply by fact
             for (int i = 0; i < idSize; ++i) {
                 int globalRow = id(i);
@@ -547,8 +541,15 @@ int AmgXGenLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker
     return 0;
 }
 
-/* Utility functions to convert from CSR to Block CSR format. 
- * This algorithm is adapted from the implementation in SciPy's `sparsetools`. 
+/* Utility functions for block size estimation and counting.
+ * These functions help determine the optimal block size for the block CSR format
+ * by analyzing the sparsity pattern of the system of equations.
+ * The estimation is based on the efficiency of different block sizes, where
+ * efficiency is defined as the ratio of nonzeros to the total number of elements
+ * in the blocks. The algorithm tries to find the largest block size that maintains
+ * a good efficiency (i.e., not too many zeros within blocks).
+ *
+ * This algorithm is adapted from the implementation in SciPy's `sparsetools`:
  * https://github.com/scipy/scipy/blob/0f1fd4a7268b813fa2b844ca6038e4dfdf90084a/scipy/sparse/sparsetools/csr.h#L205-L254
  */
 
@@ -624,8 +625,18 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
         return -1;
     }
 
+    if (blockSize < 1) {
+        opserr << "blockSize must be >= 1\n";
+        return -1;
+    }
+
+    if (size % blockSize != 0) {
+        opserr << "size of soe must be divisible by blockSize\n";
+        return -1;
+    }
+
     int numBlockCols = size / blockSize;
-    std::vector<int> mask(numBlockCols + 1, -1);
+    std::vector<int> mask(numBlockCols, -1);
     int totalNumBlocks = 0;
 
     for (int i = 0; i < size; i++) {
@@ -633,7 +644,7 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
         Vertex* theVertex = theGraph.getVertexPtr(i);
         if (theVertex == nullptr) {
             opserr << "WARNING: AmgXGenLinSOE::setSize :"
-                << " vertex " << row << " not in graph! - size set to 0\n";
+                << " vertex " << i << " not in graph! - size set to 0\n";
             size = 0;
             return -1;
         }
