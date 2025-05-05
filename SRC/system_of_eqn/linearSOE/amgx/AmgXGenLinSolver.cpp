@@ -110,7 +110,6 @@ void* OPS_AmgXGenLinSolver()
     #endif
 }
 
-#ifdef _AMGX
 AmgXGenLinSolver::AmgXGenLinSolver( 
     const char *configFile, const char *configOptions, 
     const char* mode, bool usePinnedMemory,
@@ -118,6 +117,7 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
     _matrixStructureHasChanged(true), _usePinnedMemory(usePinnedMemory)
 {
+    #ifdef _AMGX
     /* Initialize AMGX library - only done once across all instances */
     if (!_AmgXInitialized) {
         AMGX_SAFE_CALL(AMGX_initialize());
@@ -188,9 +188,11 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     AMGX_vector_create(&_Solution, _Resources, _Mode);
 
     _ActiveSolverInstances++;
+    #endif
 }
 
 AmgXGenLinSolver::~AmgXGenLinSolver() {
+    #ifdef _AMGX
     /* destroy resources, matrix, vector and solver */
     if (_Solution) { AMGX_vector_destroy(_Solution); _Solution = nullptr; }
     if (_RHS) { AMGX_vector_destroy(_RHS); _RHS = nullptr; }
@@ -211,9 +213,11 @@ AmgXGenLinSolver::~AmgXGenLinSolver() {
         AMGX_SAFE_CALL(AMGX_finalize());
         _AmgXInitialized = false;
     }
+    #endif
 }
 
 int AmgXGenLinSolver::solve() {
+    #ifdef _AMGX
     /* Obtain information about the matrix structure */
     int numRowBlocks = theSOE->_ARowPtrBlock.size() - 1;
     int nnzBlocks = theSOE->_AColIdxBlock.size();
@@ -324,6 +328,10 @@ int AmgXGenLinSolver::solve() {
     }
 
     return 0;
+    #else
+    opserr << "ERROR: AmgXGenLinSolver is not available" << endln;
+    return -1;
+    #endif
 }
 
 int AmgXGenLinSolver::setSize()
@@ -353,12 +361,18 @@ int AmgXGenLinSolver::recvSelf(int ctag,
 }
 
 int AmgXGenLinSolver::getNumIterations() {
+    #ifdef _AMGX
     int numIterations;
     AMGX_solver_get_iterations_number(_Solver, &numIterations);
     return numIterations;
+    #else
+    opserr << "ERROR: AmgXGenLinSolver is not available" << endln;
+    return -1;
+    #endif
 }
 
 double AmgXGenLinSolver::getFinalResidualNorm() {
+    #ifdef _AMGX
     double residualComponent;
     double finalResidualNorm = 0.0;
     for (int blockIdx = 0; blockIdx < theSOE->_BlockSize; blockIdx++) {
@@ -366,5 +380,8 @@ double AmgXGenLinSolver::getFinalResidualNorm() {
         finalResidualNorm += residualComponent * residualComponent;
     }
     return std::sqrt(finalResidualNorm);
+    #else
+    opserr << "ERROR: AmgXGenLinSolver is not available" << endln;
+    return -1;
+    #endif
 }
-#endif

@@ -31,14 +31,10 @@
 #ifndef AmgXGenLinSOE_h
 #define AmgXGenLinSOE_h
 
-#ifdef _AMGX
 #include <LinearSOE.h>
 #include <Vector.h>
 #include <vector> // for std::vector
 #include <OPS_Stream.h>  // needed for opserr
-
-// Forward declaration of the default callback
-void defaultAmgXCallback(const char* msg, int length);
 
 class AmgXGenLinSolver;
 
@@ -88,6 +84,5 @@ class AmgXGenLinSOE : public LinearSOE
         int countBlocks(Graph &theGraph, int block_size);
 
 };
-#endif
 
 #endif

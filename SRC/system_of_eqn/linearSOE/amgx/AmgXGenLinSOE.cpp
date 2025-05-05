@@ -43,7 +43,6 @@
 #include <FEM_ObjectBroker.h>
 #include <ID.h>
 
-#ifdef _AMGX
 AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, int blockSize)
     : LinearSOE(the_Solver, LinSOE_TAGS_AmgXGenLinSOE), 
     _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), _BlockSize(blockSize)
@@ -578,4 +577,3 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
 
     return totalNumBlocks;
 }
-#endif

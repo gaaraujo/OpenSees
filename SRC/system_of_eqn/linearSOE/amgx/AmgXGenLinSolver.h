@@ -50,6 +50,9 @@
 
 #ifdef _AMGX
 #include <amgx_c.h>
+#endif
+
+void defaultAmgXCallback(const char* msg, int length);
 
 class AmgXGenLinSOE;
 
@@ -78,6 +81,7 @@ class AmgXGenLinSolver : public LinearSOESolver
         bool _usePinnedMemory;
         bool _matrixStructureHasChanged;
 
+        #ifdef _AMGX
         // Static members for global state
         static bool _AmgXInitialized;           ///< Whether AMGX is initialized
         static int _ActiveSolverInstances;     ///< Count of active solver instances
@@ -90,8 +94,7 @@ class AmgXGenLinSolver : public LinearSOESolver
         AMGX_vector_handle    _Solution     = nullptr;  ///< Solution vector handle
         AMGX_solver_handle    _Solver       = nullptr;  ///< Solver handle
         AMGX_Mode             _Mode;                    ///< Solver mode
+        #endif
 };
-
-#endif
 
 #endif
