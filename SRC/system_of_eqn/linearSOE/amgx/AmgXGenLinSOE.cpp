@@ -43,84 +43,11 @@
 #include <FEM_ObjectBroker.h>
 #include <ID.h>
 
-void defaultAmgXCallback(const char* msg, int length) {
-    if (msg && length > 0) {
-        opserr.write(msg, length);
-        opserr << endln;
-    }
-}
-
-AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, 
-    char *configFile, char *configOptions, 
-    AMGX_Mode mode, int blockSize,
-    void (*callback)(const char* msg, int length))
+AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, int blockSize)
     : LinearSOE(the_Solver, LinSOE_TAGS_AmgXGenLinSOE), 
     _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), _BlockSize(blockSize)
 {
     the_Solver.setLinearSOE(*this);
-
-    /* Initialize AMGX library - only done once across all instances */
-    if (!_AmgXInitialized) {
-        AMGX_SAFE_CALL(AMGX_initialize());
-        AMGX_SAFE_CALL(AMGX_install_signal_handler());
-        _AmgXInitialized = true;
-    }
-    AMGX_SAFE_CALL(AMGX_register_print_callback(callback));
-
-    if (configFile != nullptr && configOptions != nullptr) {
-        AMGX_SAFE_CALL(AMGX_config_create_from_file_and_string(&_Config, configFile, configOptions));
-    } else if (configFile != nullptr) {
-        AMGX_SAFE_CALL(AMGX_config_create_from_file(&_Config, configFile));
-    } else if (configOptions != nullptr) {
-        AMGX_SAFE_CALL(AMGX_config_create(&_Config, configOptions));
-    } else {
-        opserr << "AmgXGenLinSOE: No config file or options provided" << endln;
-        opserr << "AmgXGenLinSOE: Using default config" << endln;
-
-        /* The following settings create an Aggregation solver with DILU 
-         * smoother, with 1 pre and 1 post sweep. The solver will stop when 
-         * the L2 norm has been reduced by 1000 from the initial norm.
-         */
-        const char* defaultOptions =
-            "config_version=2, "
-            "algorithm=AGGREGATION, "
-            "selector=ONE_PHASE_HANDSHAKING, "
-            "cycle=V, "
-            "smoother=MULTICOLOR_DILU, "
-            "presweeps=1, "
-            "postsweeps=1, "
-            "coarse_solver=NOSOLVER, "
-            "coarsest_sweeps=2, "
-            "max_levels=1000, "
-            "norm=L2, "
-            "convergence=RELATIVE_INI, "
-            "max_uncolored_percentage=0.15, "
-            "max_iters=1000, "
-            "monitor_residual=1, "
-            "tolerance=0.001, "
-            "print_solve_stats=1, "
-            "print_grid_stats=1, "
-            "obtain_timings=1;";
-        AMGX_SAFE_CALL(AMGX_config_create(&_Config, defaultOptions));
-    }
-
-    /* Monitor residual and store residual history */
-    AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, "monitor_residual=1, store_res_history=1"));
-
-    /* Switch on internal error handling 
-     * (no need to use AMGX_SAFE_CALL after this point) */
-    AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, "exception_handling=1"));
-
-    /* Create resources: single-GPU and single-threaded applications only */
-    AMGX_resources_create_simple(&_Resources, _Config);
-
-    /* Create solver, matrix, rhs and solution vectors */
-    AMGX_solver_create(&_Solver, _Resources, _Mode, _Config);
-    AMGX_matrix_create(&_Matrix, _Resources, _Mode);
-    AMGX_vector_create(&_RHS, _Resources, _Mode);
-    AMGX_vector_create(&_Solution, _Resources, _Mode);
-
-    _ActiveSolverInstances++;
 }
 
 AmgXGenLinSOE::AmgXGenLinSOE(): LinearSOE(LinSOE_TAGS_AmgXGenLinSOE), 
@@ -131,26 +58,7 @@ AmgXGenLinSOE::AmgXGenLinSOE(): LinearSOE(LinSOE_TAGS_AmgXGenLinSOE),
 
 AmgXGenLinSOE::~AmgXGenLinSOE() 
 {
-    /* destroy resources, matrix, vector and solver */
-    if (_Solution) { AMGX_vector_destroy(_Solution); _Solution = nullptr; }
-    if (_RHS) { AMGX_vector_destroy(_RHS); _RHS = nullptr; }
-    if (_Matrix) { AMGX_matrix_destroy(_Matrix); _Matrix = nullptr; }
-    if (_Solver) { AMGX_solver_destroy(_Solver); _Solver = nullptr; }
-    if (_Resources) { AMGX_resources_destroy(_Resources); _Resources = nullptr; }
     
-    /* destroy config (need to use AMGX_SAFE_CALL after this point) */
-    if (_Config) { AMGX_SAFE_CALL(AMGX_config_destroy(_Config)); _Config = nullptr; }
-
-    if (_ActiveSolverInstances > 0) {
-        _ActiveSolverInstances--;
-    }
-
-    // Finalize AMGX only when last instance is destroyed
-    if (_ActiveSolverInstances == 0 && _AmgXInitialized) {
-        AMGX_reset_signal_handler();
-        AMGX_SAFE_CALL(AMGX_finalize());
-        _AmgXInitialized = false;
-    }
 }
 
 int AmgXGenLinSOE::getNumEqn(void) const 
@@ -180,16 +88,16 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
         _BlockSize = estimateBlockSize(theGraph, nnz);
     }
     if (_BlockSize == -1) {
-        opserr << "Error: either block size could not be estimated ";
+        opserr << "WARNING: either block size could not be estimated ";
         opserr << "or provided block size is invalid. ";
-        opserr << "Please manually provide a positive block size." << endln;
+        opserr << "Please manually provide a positive block size. -- AmgXGenLinSOE::setSize" << endln;
         return -1;
     }
     
     if (size % _BlockSize != 0) {
-        opserr << "Error: the number of equations is not divisible by the block size. ";
+        opserr << "WARNING: the number of equations is not divisible by the block size. ";
         opserr << "Please provide a block size that divides the number of equations evenly, ";
-        opserr << "or set the block size to 0 to automatically estimate it. " << endln;
+        opserr << "or set the block size to 0 to automatically estimate it. -- AmgXGenLinSOE::setSize" << endln;
         return -1;
     }
 
@@ -294,7 +202,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     LinearSOESolver *the_Solver = this->getSolver();
     int solverOK = the_Solver->setSize();
     if (solverOK < 0) {
-        opserr << "WARNING:AmgXGenLinSOE::setSize :";
+        opserr << "WARNING: AmgXGenLinSOE::setSize :";
         opserr << " solver failed setSize()\n";
         return solverOK;
     }
@@ -312,7 +220,7 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     // Check that m and id are of similar size
     if (idSize != m.noRows() && idSize != m.noCols()) {
-        opserr << "AmgXGenLinSOE::addA() ";
+        opserr << "WARNING: AmgXGenLinSOE::addA() ";
         opserr << " - Matrix and ID not of similar sizes\n";
         return -1;
     }
@@ -420,7 +328,7 @@ int AmgXGenLinSOE::addB(const Vector &v, const ID &id, double fact)
 
     int idSize = id.Size();
     if (idSize != v.Size()) {
-        opserr << "AmgXGenLinSOE::addB() - Vector and ID not of similar sizes\n";
+        opserr << "WARNING: AmgXGenLinSOE::addB() - Vector and ID not of similar sizes\n";
         return -1;
     }
 
@@ -456,7 +364,7 @@ int AmgXGenLinSOE::setB(const Vector &v, double fact)
 
     int size = _B.Size();
     if (v.Size() != size) {
-        opserr << "WARNING AmgXGenLinSOE::setB() -";
+        opserr << "WARNING: AmgXGenLinSOE::setB() -";
         opserr << " incompatible sizes " << size << " and " << v.Size() << endln;
         return -1;
     }
@@ -523,7 +431,7 @@ int AmgXGenLinSOE::setAmgXGenLinSolver(AmgXGenLinSolver &newSolver)
     if (_X.Size() != 0) {
         int solverOK = newSolver.setSize();
         if (solverOK < 0) {
-            opserr << "WARNING:AmgXGenLinSOE::setSolver :";
+            opserr << "WARNING: AmgXGenLinSOE::setSolver :";
             opserr << "the new solver could not setSize() - staying with old\n";
             return -1;
         }
@@ -559,7 +467,7 @@ int AmgXGenLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency
 {
     int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "size of soe < 0\n";
+        opserr << "WARNING: size of soe < 0 -- AmgXGenLinSOE::estimateBlockSize" << endln;
         return -1;
     }
 
@@ -568,7 +476,7 @@ int AmgXGenLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency
     }
 
     if (efficiency <= 0.0 || efficiency >= 1.0) {
-        opserr << "efficiency must satisfy 0.0 < efficiency < 1.0" << endln;
+        opserr << "WARNING: efficiency must satisfy 0.0 < efficiency < 1.0 -- AmgXGenLinSOE::estimateBlockSize" << endln;
         return -1;
     }
 
@@ -621,17 +529,17 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
 {
     int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "size of soe < 0\n";
+        opserr << "WARNING: size of soe < 0 -- AmgXGenLinSOE::countBlocks" << endln;
         return -1;
     }
 
     if (blockSize < 1) {
-        opserr << "blockSize must be >= 1\n";
+        opserr << "WARNING: blockSize must be >= 1 -- AmgXGenLinSOE::countBlocks" << endln;
         return -1;
     }
 
     if (size % blockSize != 0) {
-        opserr << "size of soe must be divisible by blockSize\n";
+        opserr << "WARNING: size of soe must be divisible by blockSize -- AmgXGenLinSOE::countBlocks" << endln;
         return -1;
     }
 

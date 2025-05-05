@@ -31,11 +31,13 @@
 #ifndef AmgXGenLinSOE_h
 #define AmgXGenLinSOE_h
 
+#ifdef _AMGX
 #include <amgx_c.h>
+#endif
+
 #include <LinearSOE.h>
 #include <Vector.h>
-#include <vector>
-
+#include <vector> // for std::vector
 #include <OPS_Stream.h>  // needed for opserr
 
 // Forward declaration of the default callback
@@ -46,10 +48,7 @@ class AmgXGenLinSolver;
 class AmgXGenLinSOE : public LinearSOE
 {
     public:
-        AmgXGenLinSOE(AmgXGenLinSolver &theSolver, 
-            char *configFile, char *configOptions, 
-            AMGX_Mode mode = AMGX_mode_dDDI, int blockSize = 1,
-            void (*callback)(const char* msg, int length) = defaultAmgXCallback);
+        AmgXGenLinSOE(AmgXGenLinSolver &theSolver, int blockSize);
         AmgXGenLinSOE();
 
         ~AmgXGenLinSOE();
@@ -86,22 +85,10 @@ class AmgXGenLinSOE : public LinearSOE
         std::vector<int> _ARowPtrBlock, _AColIdxBlock;
         std::vector<double> _AValuesBlock;
         int _BlockSize;
-
-        // Static members for global state
-        static bool _AmgXInitialized;           ///< Whether AMGX is initialized
-        static int _ActiveSolverInstances;     ///< Count of active solver instances
-
-        // AMGX handles
-        AMGX_config_handle    _Config       = nullptr;  ///< Configuration handle
-        AMGX_resources_handle _Resources    = nullptr;  ///< Resources handle
-        AMGX_matrix_handle    _Matrix       = nullptr;  ///< Matrix handle
-        AMGX_vector_handle    _RHS          = nullptr;  ///< Right-hand side vector handle
-        AMGX_vector_handle    _Solution     = nullptr;  ///< Solution vector handle
-        AMGX_solver_handle    _Solver       = nullptr;  ///< Solver handle
-        AMGX_Mode             _Mode;                    ///< Solver mode
         
         // Block CSR format conversion
         int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = 0.7);
         int countBlocks(Graph &theGraph, int block_size);
+
 };
 #endif
