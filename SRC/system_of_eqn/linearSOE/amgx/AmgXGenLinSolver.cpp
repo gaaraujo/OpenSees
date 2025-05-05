@@ -43,6 +43,13 @@ bool AmgXGenLinSolver::_AmgXInitialized = false;
 int AmgXGenLinSolver::_ActiveSolverInstances = 0;
 #endif
 
+void defaultAmgXCallback(const char* msg, int length) {
+    if (msg && length > 0) {
+        opserr.write(msg, length);
+        opserr << endln;
+    }
+}
+
 void* OPS_AmgXGenLinSolver()
 {
     std::string configFileString; 
@@ -101,13 +108,6 @@ void* OPS_AmgXGenLinSolver()
            << "is compiled with AMGX support (-D_AMGX)\n";
     return nullptr;
     #endif
-}
-
-void defaultAmgXCallback(const char* msg, int length) {
-    if (msg && length > 0) {
-        opserr.write(msg, length);
-        opserr << endln;
-    }
 }
 
 #ifdef _AMGX
