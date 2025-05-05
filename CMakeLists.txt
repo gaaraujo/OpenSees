@@ -305,6 +305,27 @@ else()
    set (PYTHON_FOUND TRUE CACHE BOOL "providing own python lib")
 endif()
 
+# Check if AMGX_DIR is defined (user must set this)
+if (NOT DEFINED AMGX_DIR)
+    set(AMGX_FLAG -D_NOAMGX)
+    set(AMGX_LIBRARIES "")
+    set(AMGX_INCLUDE_DIR "")
+
+else()
+    message(STATUS "Compiling with AMGX from ${AMGX_DIR}")
+    set(AMGX_FLAG -D_AMGX)
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        set(AMGX_LIBRARIES "${AMGX_DIR}/amgx.lib")
+    else()
+        set(AMGX_LIBRARIES "${AMGX_DIR}/libamgx.a")
+    endif()
+    if(EXISTS "${AMGX_DIR}/../include/amgx_c.h")
+      set(AMGX_INCLUDE_DIR "${AMGX_DIR}/../include")
+    else()
+      message(FATAL_ERROR "Could not find amgx_c.h in expected location: ${AMGX_DIR}/../include")
+    endif()
+endif()
 
 find_package(MPI)
 find_package(MKL)
@@ -407,6 +428,7 @@ target_link_libraries(OPS_Numerics INTERFACE
        ${AMD_LIBRARIES}       
        ${LAPACK_LIBRARIES}
        ${EIGENAPI_LIBRARIES}
+       ${AMGX_LIBRARIES}
 )
 
 set(TCL_LIBRARIES ${TCL_LIBRARY})
@@ -586,6 +608,10 @@ target_link_libraries(OpenSees
   ${CONAN_LIBS}
 )
 
+if(DEFINED AMGX_DIR)
+  target_include_directories(OpenSees PUBLIC ${AMGX_INCLUDE_DIR})
+  target_compile_definitions(OpenSees PUBLIC ${AMGX_FLAG})
+endif()
 
 #
 # OpenSeesSP Tcl Parallel Interpreter
@@ -618,6 +644,12 @@ if(MPI_FOUND)
 
 
     target_include_directories(OpenSeesSP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
+    
+    if(DEFINED AMGX_DIR)
+      target_include_directories(OpenSeesSP PRIVATE ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesSP PRIVATE ${AMGX_FLAG})
+    endif()
+    
     target_compile_options(OpenSeesSP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
 
     if (DEFINED OPENMPI)
@@ -676,6 +708,11 @@ if(MPI_FOUND)
     )
 
     target_include_directories(OpenSeesMP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
+    
+    if(DEFINED AMGX_DIR)
+      target_include_directories(OpenSeesMP PRIVATE ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesMP PRIVATE ${AMGX_FLAG})
+    endif()
 
     target_compile_options(OpenSeesMP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
     
@@ -725,6 +762,10 @@ add_library(OpenSeesPy SHARED EXCLUDE_FROM_ALL
 set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
+if(DEFINED AMGX_DIR)
+  target_include_directories(OpenSeesPy PUBLIC ${AMGX_INCLUDE_DIR})
+  target_compile_definitions(OpenSeesPy PUBLIC ${AMGX_FLAG})
+endif()
 
 target_link_libraries(OpenSeesPy
    OpenSeesLIB 
