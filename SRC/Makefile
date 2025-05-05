@@ -1262,6 +1262,8 @@ SequentialSysOfEqn_LIBS =	$(FE)/system_of_eqn/linearSOE/LinearSOE.o \
 	$(FE)/system_of_eqn/linearSOE/sparseGEN/PFEMSolver_Laplace.o \
 	$(FE)/system_of_eqn/linearSOE/sparseGEN/PFEMSolver_LumpM.o \
 	$(SUPER_LU_OBJ) \
+	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSOE.o \
+	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSolver.o \
 	$(FE)/system_of_eqn/linearSOE/umfGEN/UmfpackGenLinSOE.o \
 	$(FE)/system_of_eqn/linearSOE/umfGEN/UmfpackGenLinSolver.o \
 	$(FE)/system_of_eqn/eigenSOE/FullGenEigenSOE.o \
