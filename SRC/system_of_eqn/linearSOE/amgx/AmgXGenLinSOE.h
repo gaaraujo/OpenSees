@@ -31,10 +31,6 @@
 #ifndef AmgXGenLinSOE_h
 #define AmgXGenLinSOE_h
 
-#ifdef _AMGX
-#include <amgx_c.h>
-#endif
-
 #include <LinearSOE.h>
 #include <Vector.h>
 #include <vector> // for std::vector
