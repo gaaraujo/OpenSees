@@ -31,6 +31,7 @@
 #ifndef AmgXGenLinSOE_h
 #define AmgXGenLinSOE_h
 
+#ifdef _AMGX
 #include <LinearSOE.h>
 #include <Vector.h>
 #include <vector> // for std::vector
@@ -87,4 +88,6 @@ class AmgXGenLinSOE : public LinearSOE
         int countBlocks(Graph &theGraph, int block_size);
 
 };
+#endif
+
 #endif

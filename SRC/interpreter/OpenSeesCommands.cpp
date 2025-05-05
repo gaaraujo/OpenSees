@@ -107,6 +107,8 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <MumpsSOE.h>
 #endif
 #include <BackgroundMesh.h>
+#include <AmgXGenLinSolver.h>
+#include <AmgXGenLinSOE.h>
 
 #ifdef _PARALLEL_INTERPRETERS
 bool setMPIDSOEFlag = false;
@@ -1441,7 +1443,8 @@ int OPS_System()
     } else if (strcmp(type, "UmfPack") == 0 || strcmp(type, "Umfpack") == 0) {
 
 	theSOE = (LinearSOE*)OPS_UmfpackGenLinSolver();
-
+    } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 || strcmp(type,"AMGX") == 0) {
+        theSOE = (LinearSOE*)OPS_AmgXGenLinSolver();
     } else if (strcmp(type,"FullGeneral") == 0) {
 	// now must determine the type of solver to create from rest of args
 	theSOE = (LinearSOE*)OPS_FullGenLinLapackSolver();

@@ -35,31 +35,70 @@
 #include <Channel.h>
 #include <FEM_ObjectBroker.h>
 #include <OPS_Stream.h>
-
+#include <elementAPI.h>
+#include <string>
 // Static member initialization
+#ifdef _AMGX
 bool AmgXGenLinSolver::_AmgXInitialized = false;
 int AmgXGenLinSolver::_ActiveSolverInstances = 0;
-
-void AmgXGenLinSolver::printAmgXNotAvailable() {
-    opserr << "ERROR: AmgXGenLinSolver requires OpenSees "
-           << "to be compiled with AMGX (-D_AMGX)\n";
-}
+#endif
 
 void* OPS_AmgXGenLinSolver()
 {
-    #ifdef _AMGX
-    char *configFile = nullptr; 
-    char *configOptions = nullptr; 
-    AMGX_Mode mode = AMGX_mode_dDDI; 
+    std::string configFileString; 
+    std::string configOptionsString; 
+    std::string modeString = "dDDI"; 
     bool usePinnedMemory = true;
     void (*callback)(const char* msg, int length) = defaultAmgXCallback;
     int blockSize = 1;
+
+    int numData = 1;
+    while(OPS_GetNumRemainingInputArgs() > 0) {
+        std::string type = OPS_GetString();
+        if (OPS_GetNumRemainingInputArgs() > 0) {
+            if(type == "configFile" || type == "-configFile") {
+                configFileString = OPS_GetString();
+            } else if(type == "configOptions" || type == "-configOptions") {
+                configOptionsString = OPS_GetString();
+            } else if(type == "mode" || type == "-mode") {
+                modeString = OPS_GetString();
+                if(modeString != "dDDI") {
+                    opserr << "ERROR: AmgXGenLinSolver: Invalid mode (" 
+                        << modeString.c_str() << "). Only dDDI is supported.\n";
+                    return nullptr;
+                }
+            } else if(type == "usePinnedMemory" || type == "-usePinnedMemory") {
+                int flag = 1;
+                if(OPS_GetIntInput(&numData, &flag) < 0) {
+                    opserr << "ERROR: AmgXGenLinSolver: Invalid value for usePinnedMemory\n";
+                    return nullptr;
+                }
+                usePinnedMemory = (flag == 1);
+            } else if(type == "blockSize" || type == "-blockSize") {
+                if(OPS_GetIntInput(&numData, &blockSize) < 0) {
+                    opserr << "ERROR: AmgXGenLinSolver: Invalid blockSize\n";
+                    return nullptr;
+                }
+                if(blockSize < 0) {
+                    opserr << "ERROR: AmgXGenLinSolver: blockSize cannot be negative\n";
+                    return nullptr;
+                }
+            }
+        }
+    }
+
+    const char* configFile = (configFileString.empty()) ? nullptr : configFileString.c_str();
+    const char* configOptions = (configOptionsString.empty()) ? nullptr : configOptionsString.c_str();
+    const char* mode = modeString.c_str();
+
+    #ifdef _AMGX
     AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
         configFile, configOptions, mode, usePinnedMemory, callback
     );
     return new AmgXGenLinSOE(*theSolver, blockSize);
     #else
-    opserr << "ERROR: AmgXGenLinSolver is only available when OpenSees is compiled with AMGX support (-D_AMGX)\n";
+    opserr << "ERROR: AmgXGenLinSolver is only available when OpenSees "
+           << "is compiled with AMGX support (-D_AMGX)\n";
     return nullptr;
     #endif
 }
@@ -73,8 +112,8 @@ void defaultAmgXCallback(const char* msg, int length) {
 
 #ifdef _AMGX
 AmgXGenLinSolver::AmgXGenLinSolver( 
-    char *configFile, char *configOptions, 
-    AMGX_Mode mode, bool usePinnedMemory,
+    const char *configFile, const char *configOptions, 
+    const char* mode, bool usePinnedMemory,
     void (*callback)(const char* msg, int length))
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
     _matrixStructureHasChanged(true), _usePinnedMemory(usePinnedMemory)
@@ -135,6 +174,13 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     /* Create resources: single-GPU and single-threaded applications only */
     AMGX_resources_create_simple(&_Resources, _Config);
 
+    /* Set AmgX mode */
+    if(mode == "dDDI") {
+        _Mode = AMGX_mode_dDDI;
+    } else {
+        opserr << "ERROR: AmgXGenLinSolver: Invalid mode (" << mode << "). Only dDDI is supported.\n";
+        return;
+    }
     /* Create solver, matrix, rhs and solution vectors */
     AMGX_solver_create(&_Solver, _Resources, _Mode, _Config);
     AMGX_matrix_create(&_Matrix, _Resources, _Mode);
@@ -143,14 +189,8 @@ AmgXGenLinSolver::AmgXGenLinSolver(
 
     _ActiveSolverInstances++;
 }
-#else
-AmgXGenLinSolver::AmgXGenLinSolver() : LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver) {
-    printAmgXNotAvailable();
-}
-#endif
 
 AmgXGenLinSolver::~AmgXGenLinSolver() {
-    #ifdef _AMGX
     /* destroy resources, matrix, vector and solver */
     if (_Solution) { AMGX_vector_destroy(_Solution); _Solution = nullptr; }
     if (_RHS) { AMGX_vector_destroy(_RHS); _RHS = nullptr; }
@@ -171,11 +211,9 @@ AmgXGenLinSolver::~AmgXGenLinSolver() {
         AMGX_SAFE_CALL(AMGX_finalize());
         _AmgXInitialized = false;
     }
-    #endif
 }
 
 int AmgXGenLinSolver::solve() {
-    #ifdef _AMGX
     /* Obtain information about the matrix structure */
     int numRowBlocks = theSOE->_ARowPtrBlock.size() - 1;
     int nnzBlocks = theSOE->_AColIdxBlock.size();
@@ -286,32 +324,18 @@ int AmgXGenLinSolver::solve() {
     }
 
     return 0;
-    #else
-    printAmgXNotAvailable();
-    return -1;
-    #endif
 }
 
 int AmgXGenLinSolver::setSize()
 {
-    #ifdef _AMGX
     _matrixStructureHasChanged = true;
     return 0;
-    #else
-    printAmgXNotAvailable();
-    return -1;
-    #endif
 }
 
 int AmgXGenLinSolver::setLinearSOE(AmgXGenLinSOE &theLinearSOE)
 {
-    #ifdef _AMGX
     theSOE = &theLinearSOE;
     return 0;
-    #else
-    printAmgXNotAvailable();
-    return -1;
-    #endif
 }
 
 int AmgXGenLinSolver::sendSelf(int cTag, Channel &theChannel)
@@ -329,18 +353,12 @@ int AmgXGenLinSolver::recvSelf(int ctag,
 }
 
 int AmgXGenLinSolver::getNumIterations() {
-    #ifdef _AMGX
     int numIterations;
     AMGX_solver_get_iterations_number(_Solver, &numIterations);
     return numIterations;
-    #else
-    printAmgXNotAvailable();
-    return -1;
-    #endif
 }
 
 double AmgXGenLinSolver::getFinalResidualNorm() {
-    #ifdef _AMGX
     double residualComponent;
     double finalResidualNorm = 0.0;
     for (int blockIdx = 0; blockIdx < theSOE->_BlockSize; blockIdx++) {
@@ -348,8 +366,5 @@ double AmgXGenLinSolver::getFinalResidualNorm() {
         finalResidualNorm += residualComponent * residualComponent;
     }
     return std::sqrt(finalResidualNorm);
-    #else
-    printAmgXNotAvailable();
-    return -1;
-    #endif
 }
+#endif

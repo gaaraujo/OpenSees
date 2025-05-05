@@ -43,6 +43,7 @@
 #include <FEM_ObjectBroker.h>
 #include <ID.h>
 
+#ifdef _AMGX
 AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, int blockSize)
     : LinearSOE(the_Solver, LinSOE_TAGS_AmgXGenLinSOE), 
     _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), _BlockSize(blockSize)
@@ -87,7 +88,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     if (_BlockSize == 0) {
         _BlockSize = estimateBlockSize(theGraph, nnz);
     }
-    if (_BlockSize == -1) {
+    if (_BlockSize <= 0) {
         opserr << "WARNING: either block size could not be estimated ";
         opserr << "or provided block size is invalid. ";
         opserr << "Please manually provide a positive block size. -- AmgXGenLinSOE::setSize" << endln;
@@ -577,3 +578,4 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
 
     return totalNumBlocks;
 }
+#endif

@@ -501,6 +501,7 @@ void* OPS_PFEMSolver_Laplace();
 void* OPS_PFEMSolver_LumpM();
 void* OPS_SymSparseLinSolver();
 void* OPS_FullGenLinLapackSolver();
+void* OPS_AmgXGenLinSolver();
 
 void* OPS_PlainNumberer();
 
