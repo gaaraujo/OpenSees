@@ -1443,7 +1443,8 @@ int OPS_System()
     } else if (strcmp(type, "UmfPack") == 0 || strcmp(type, "Umfpack") == 0) {
 
 	theSOE = (LinearSOE*)OPS_UmfpackGenLinSolver();
-    } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 || strcmp(type,"AMGX") == 0) {
+    } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 
+                || strcmp(type,"AMGX") == 0 || strcmp(type,"Amgx") == 0) {
         theSOE = (LinearSOE*)OPS_AmgXGenLinSolver();
     } else if (strcmp(type,"FullGeneral") == 0) {
 	// now must determine the type of solver to create from rest of args

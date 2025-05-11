@@ -358,6 +358,10 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #include <PetscSparseSeqSolver.h>
 #endif
 
+#include <AmgXGenLinSOE.h>
+#include <AmgXGenLinSolver.h>
+extern void* OPS_AmgXGenLinSolver();
+
 #include <SparseGenRowLinSOE.h>
 #include <SymSparseLinSOE.h>
 #include <SymSparseLinSolver.h>
@@ -3530,6 +3534,13 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 
 #endif
 
+  else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
+           || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
+    // Shift argument counter to start at 2 (skips "system AmgX" from argv)
+    OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+    // Create the AmgX solver and return the corresponding LinearSOE
+    theSOE = (LinearSOE*)OPS_AmgXGenLinSolver();
+  }
 
 #ifdef _MUMPS
 
