@@ -692,7 +692,6 @@
 #include "profileSPD/ProfileSPDLinSOE.h"
 #include "profileSPD/ProfileSPDLinSubstrSolver.h"
 #include "sparseGEN/SparseGenColLinSOE.h"
-#include "amgx/AmgXGenLinSOE.h"
 #include "DomainDecompositionAnalysis.h"
 
 // load patterns
@@ -735,6 +734,9 @@
 #include "SparseGenColLinSOE.h"
 #endif
 
+#ifdef _AMGX
+#include "AmgXGenLinSOE.h"
+#endif
 
 #ifdef _MUMPS
 #include "MumpsSOE.h"

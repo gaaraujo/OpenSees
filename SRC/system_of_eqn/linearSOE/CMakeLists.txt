@@ -32,4 +32,4 @@ add_subdirectory(profileSPD)
 #add_subdirectory(mumps)
 #add_subdirectory(itpack)
 
-add_subdirectory(amgx)
+#add_subdirectory(amgx)

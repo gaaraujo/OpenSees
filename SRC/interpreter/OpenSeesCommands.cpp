@@ -107,8 +107,10 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <MumpsSOE.h>
 #endif
 #include <BackgroundMesh.h>
+#ifdef _AMGX
 #include <AmgXGenLinSolver.h>
 #include <AmgXGenLinSOE.h>
+#endif
 
 #ifdef _PARALLEL_INTERPRETERS
 bool setMPIDSOEFlag = false;
@@ -1443,9 +1445,11 @@ int OPS_System()
     } else if (strcmp(type, "UmfPack") == 0 || strcmp(type, "Umfpack") == 0) {
 
 	theSOE = (LinearSOE*)OPS_UmfpackGenLinSolver();
+#ifdef _AMGX
     } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 
                 || strcmp(type,"AMGX") == 0 || strcmp(type,"Amgx") == 0) {
         theSOE = (LinearSOE*)OPS_AmgXGenLinSolver();
+#endif
     } else if (strcmp(type,"FullGeneral") == 0) {
 	// now must determine the type of solver to create from rest of args
 	theSOE = (LinearSOE*)OPS_FullGenLinLapackSolver();
@@ -3683,6 +3687,103 @@ void* OPS_MumpsSolver() {
 #endif
 #endif
     return 0;
+}
+
+void* OPS_AmgXGenLinSolver()
+{
+    #ifndef _AMGX
+    opserr << "WARNING: AmgXGenLinSolver is only available when OpenSees "
+           << "is compiled with AMGX support\n";
+    return nullptr;
+    #else
+    std::string configFileStr = ""; 
+    std::string configOptionsStr = ""; 
+    std::string modeStr = "dDDI";
+    bool usePinnedMemory = true;
+    AMGX_print_callback callback = defaultAmgXCallback;
+    int blockSize = 1;
+
+    // Check if any arguments are provided
+    if (OPS_GetNumRemainingInputArgs() == 0) {
+        opserr << "WARNING: No arguments provided for AmgXGenLinSolver. Using default configuration." << endln;
+    } else if (OPS_GetNumRemainingInputArgs() % 2 != 0) {
+        opserr << "WARNING: Incorrect number of arguments for AmgXGenLinSolver. ";
+        opserr << "Expected: system AmgX <-configFile configFile> ";
+        opserr << "<-configOptions configOptions> <-mode mode> ";
+        opserr << "<-usePinnedMemory usePinnedMemory> ";
+        opserr << "<-blockSize blockSize>" << endln;
+        return nullptr;
+    }
+
+    while(OPS_GetNumRemainingInputArgs() > 0) {
+        const char* nextString = OPS_GetString();
+        if (nextString == nullptr) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid input argument" << endln;
+            return nullptr;
+        }
+
+        if (OPS_GetNumRemainingInputArgs() > 0) {
+            if(strcmp(nextString,"configFile") == 0 || strcmp(nextString,"-configFile") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for configFile" << endln;
+                    return nullptr;
+                }
+                configFileStr = nextString;
+            } else if(strcmp(nextString,"configOptions") == 0 || strcmp(nextString,"-configOptions") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for configOptions" << endln;
+                    return nullptr;
+                }
+                configOptionsStr = nextString;
+            } else if(strcmp(nextString,"mode") == 0 || strcmp(nextString,"-mode") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for mode" << endln;
+                    return nullptr;
+                }
+                if(strcmp(nextString,"dDDI") != 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid mode ("; 
+                    opserr << nextString << "). Only dDDI is supported.\n";
+                    return nullptr;
+                }
+                modeStr = nextString;
+            } else if(strcmp(nextString,"usePinnedMemory") == 0 || strcmp(nextString,"-usePinnedMemory") == 0) {
+                int numData = 1;
+                int flag = 1;
+                if(OPS_GetIntInput(&numData, &flag) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for usePinnedMemory";
+                    opserr << "Expected: usePinnedMemory <0|1>\n";
+                    return nullptr;
+                }
+                usePinnedMemory = (flag == 1);
+            } else if(strcmp(nextString,"blockSize") == 0 || strcmp(nextString,"-blockSize") == 0) {
+                int numData = 1;
+                if(OPS_GetIntInput(&numData, &blockSize) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize\n";
+                    return nullptr;
+                }
+                if(blockSize < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: blockSize cannot be negative\n";
+                    return nullptr;
+                }
+            } else {
+                opserr << "WARNING: AmgXGenLinSolver: Unknown option " << nextString << endln;
+                opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize" << endln;
+                return nullptr;
+            }
+        } else {
+            opserr << "WARNING: AmgXGenLinSolver: Missing value for argument " << nextString << endln;
+            return nullptr;
+        }
+    }
+
+    AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
+        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, callback
+    );
+    return new AmgXGenLinSOE(*theSolver, blockSize);
+    #endif
 }
 
 // Sensitivity:BEGIN /////////////////////////////////////////////

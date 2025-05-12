@@ -575,6 +575,12 @@ add_executable(OpenSees EXCLUDE_FROM_ALL
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
 )
+if(DEFINED AMGX_DIR)
+  message(STATUS "AMGX support enabled.")
+  message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
+  target_include_directories(OpenSees PUBLIC ${AMGX_INCLUDE_DIR})
+  target_compile_definitions(OpenSees PUBLIC ${AMGX_FLAG})
+endif()
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_include_directories(OpenSees PUBLIC ${TCL_INCLUDE_PATH})
@@ -607,11 +613,6 @@ target_link_libraries(OpenSees
   ${HDF5_LIBRARIES} 
   ${CONAN_LIBS}
 )
-
-if(DEFINED AMGX_DIR)
-  target_include_directories(OpenSees PUBLIC ${AMGX_INCLUDE_DIR})
-  target_compile_definitions(OpenSees PUBLIC ${AMGX_FLAG})
-endif()
 
 #
 # OpenSeesSP Tcl Parallel Interpreter
@@ -646,8 +647,10 @@ if(MPI_FOUND)
     target_include_directories(OpenSeesSP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
     
     if(DEFINED AMGX_DIR)
-      target_include_directories(OpenSeesSP PRIVATE ${AMGX_INCLUDE_DIR})
-      target_compile_definitions(OpenSeesSP PRIVATE ${AMGX_FLAG})
+      message(STATUS "AMGX support enabled.")
+      message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
+      target_include_directories(OpenSeesSP PUBLIC ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesSP PUBLIC ${AMGX_FLAG})
     endif()
     
     target_compile_options(OpenSeesSP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
@@ -710,8 +713,10 @@ if(MPI_FOUND)
     target_include_directories(OpenSeesMP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
     
     if(DEFINED AMGX_DIR)
-      target_include_directories(OpenSeesMP PRIVATE ${AMGX_INCLUDE_DIR})
-      target_compile_definitions(OpenSeesMP PRIVATE ${AMGX_FLAG})
+      message(STATUS "AMGX support enabled.")
+      message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
+      target_include_directories(OpenSeesMP PUBLIC ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesMP PUBLIC ${AMGX_FLAG})
     endif()
 
     target_compile_options(OpenSeesMP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
@@ -762,7 +767,10 @@ add_library(OpenSeesPy SHARED EXCLUDE_FROM_ALL
 set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
+
 if(DEFINED AMGX_DIR)
+  message(STATUS "AMGX support enabled.")
+  message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
   target_include_directories(OpenSeesPy PUBLIC ${AMGX_INCLUDE_DIR})
   target_compile_definitions(OpenSeesPy PUBLIC ${AMGX_FLAG})
 endif()

@@ -1262,12 +1262,16 @@ SequentialSysOfEqn_LIBS =	$(FE)/system_of_eqn/linearSOE/LinearSOE.o \
 	$(FE)/system_of_eqn/linearSOE/sparseGEN/PFEMSolver_Laplace.o \
 	$(FE)/system_of_eqn/linearSOE/sparseGEN/PFEMSolver_LumpM.o \
 	$(SUPER_LU_OBJ) \
-	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSOE.o \
-	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSolver.o \
 	$(FE)/system_of_eqn/linearSOE/umfGEN/UmfpackGenLinSOE.o \
 	$(FE)/system_of_eqn/linearSOE/umfGEN/UmfpackGenLinSolver.o \
 	$(FE)/system_of_eqn/eigenSOE/FullGenEigenSOE.o \
 	$(FE)/system_of_eqn/eigenSOE/FullGenEigenSolver.o
+
+ifeq ($(HAVEAMGX), YES)
+SequentialSysOfEqn_LIBS = $(SequentialSysOfEqn_LIBS) \
+	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSOE.o \
+	$(FE)/system_of_eqn/linearSOE/amgx/AmgXGenLinSolver.o
+endif
 
 ifeq ($(PROGRAMMING_MODE), PARALLEL_INTERPRETERS)
 SysOfEqn_LIBS = $(SequentialSysOfEqn_LIBS) \
@@ -1276,6 +1280,8 @@ SysOfEqn_LIBS = $(SequentialSysOfEqn_LIBS) \
 else
 SysOfEqn_LIBS = $(SequentialSysOfEqn_LIBS)
 endif
+
+
 
 MODEL_BUILDER_LIBS = $(FE)/modelbuilder/ModelBuilder.o \
 	$(FE)/modelbuilder/PlaneFrame.o \

@@ -1,11 +1,14 @@
+#==============================================================================
+# 
+#        OpenSees -- Open System For Earthquake Engineering Simulation
+#                Pacific Earthquake Engineering Research Center
+#
+#==============================================================================
+
 target_sources(OPS_SysOfEqn
     PRIVATE
-        AmgXGenLinSOE.cpp
-        AmgXGenLinSolver.cpp
 
     PUBLIC
-        AmgXGenLinSOE.h
-        AmgXGenLinSolver.h
 
 )
 

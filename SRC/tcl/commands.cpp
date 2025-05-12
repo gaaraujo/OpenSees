@@ -358,9 +358,10 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #include <PetscSparseSeqSolver.h>
 #endif
 
+#ifdef _AMGX
 #include <AmgXGenLinSOE.h>
 #include <AmgXGenLinSolver.h>
-extern void* OPS_AmgXGenLinSolver();
+#endif
 
 #include <SparseGenRowLinSOE.h>
 #include <SymSparseLinSOE.h>
@@ -3534,13 +3535,77 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 
 #endif
 
+#ifdef _AMGX
   else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
            || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
-    // Shift argument counter to start at 2 (skips "system AmgX" from argv)
-    OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
-    // Create the AmgX solver and return the corresponding LinearSOE
-    theSOE = (LinearSOE*)OPS_AmgXGenLinSolver();
+    
+    if (argc % 2 != 0) {
+      opserr << "WARNING: Incorrect number of arguments for AmgXGenLinSolver. ";
+      opserr << "Expected: system AmgX <-configFile configFile> ";
+      opserr << "<-configOptions configOptions> <-mode mode> ";
+      opserr << "<-usePinnedMemory usePinnedMemory> ";
+      opserr << "<-blockSize blockSize>" << endln;
+      return TCL_ERROR;
+    }
+
+    std::string configFileStr = ""; 
+    std::string configOptionsStr = ""; 
+    std::string modeStr = "dDDI";
+    bool usePinnedMemory = true;
+    AMGX_print_callback callback = defaultAmgXCallback;
+    int blockSize = 1;
+
+    int currentArg = 2;
+    while (currentArg < argc) {
+      if (argc > 2) {
+        if (strcmp(argv[currentArg],"-configFile") == 0) {
+          configFileStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-configOptions") == 0) {
+          configOptionsStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-mode") == 0) {
+          if (strcmp(argv[currentArg+1],"dDDI") != 0) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" 
+                   << argv[currentArg+1] << "). Only dDDI is supported.\n";
+            return TCL_ERROR;
+          }
+          modeStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-usePinnedMemory") == 0) {
+          int flag = 1;
+          if (Tcl_GetInt(interp, argv[currentArg+1], &flag) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for usePinnedMemory\n";
+            return TCL_ERROR;
+          }
+          usePinnedMemory = (flag == 1);
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-blockSize") == 0) {
+          if (Tcl_GetInt(interp, argv[currentArg+1], &blockSize) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize\n";
+            return TCL_ERROR;
+          }
+          if (blockSize < 0) {
+            opserr << "WARNING: AmgXGenLinSolver: blockSize cannot be negative\n";
+            return TCL_ERROR;
+          }
+          currentArg += 2;
+        } else {
+          opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
+          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize" << endln;
+          return TCL_ERROR;
+        }
+      } else {
+        currentArg++;
+      }
+    }
+
+    AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
+        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, callback
+    );
+    theSOE = new AmgXGenLinSOE(*theSolver, blockSize);
   }
+#endif
 
 #ifdef _MUMPS
 

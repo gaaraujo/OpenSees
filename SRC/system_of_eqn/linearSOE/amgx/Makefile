@@ -1,6 +1,9 @@
 include ../../../../Makefile.def
 
+OBJS       = 
+ifdef AMGX
 OBJS       = AmgXGenLinSOE.o AmgXGenLinSolver.o 
+endif
 
 all:         $(OBJS)
 

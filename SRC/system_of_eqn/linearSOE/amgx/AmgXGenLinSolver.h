@@ -48,11 +48,15 @@
 #include <LinearSOESolver.h>
 #include <OPS_Stream.h>
 
-#ifdef _AMGX
 #include <amgx_c.h>
-#endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void defaultAmgXCallback(const char* msg, int length);
+#ifdef __cplusplus
+}
+#endif
 
 class AmgXGenLinSOE;
 
@@ -61,7 +65,7 @@ class AmgXGenLinSolver : public LinearSOESolver
     public:
         AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr, 
             const char* mode = "dDDI", bool usePinnedMemory = true,
-            void (*callback)(const char* msg, int length) = defaultAmgXCallback);
+            AMGX_print_callback callback = defaultAmgXCallback);
         ~AmgXGenLinSolver();
         
         int solve();
@@ -81,7 +85,6 @@ class AmgXGenLinSolver : public LinearSOESolver
         bool _usePinnedMemory;
         bool _matrixStructureHasChanged;
 
-        #ifdef _AMGX
         // Static members for global state
         static bool _AmgXInitialized;           ///< Whether AMGX is initialized
         static int _ActiveSolverInstances;     ///< Count of active solver instances
@@ -94,7 +97,6 @@ class AmgXGenLinSolver : public LinearSOESolver
         AMGX_vector_handle    _Solution     = nullptr;  ///< Solution vector handle
         AMGX_solver_handle    _Solver       = nullptr;  ///< Solver handle
         AMGX_Mode             _Mode;                    ///< Solver mode
-        #endif
 };
 
 #endif
