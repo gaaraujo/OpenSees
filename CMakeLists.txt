@@ -18,7 +18,7 @@
 #
 #==============================================================================
 
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.17)
 project(OpenSeesFramework LANGUAGES C CXX Fortran)
 
 
@@ -305,30 +305,9 @@ else()
    set (PYTHON_FOUND TRUE CACHE BOOL "providing own python lib")
 endif()
 
-# Check if AMGX_DIR is defined (user must set this)
-if (NOT DEFINED AMGX_DIR)
-    set(AMGX_FLAG -D_NOAMGX)
-    set(AMGX_LIBRARIES "")
-    set(AMGX_INCLUDE_DIR "")
-
-else()
-    message(STATUS "Compiling with AMGX from ${AMGX_DIR}")
-    set(AMGX_FLAG -D_AMGX)
-
-    if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-        set(AMGX_LIBRARIES "${AMGX_DIR}/amgx.lib")
-    else()
-        set(AMGX_LIBRARIES "${AMGX_DIR}/libamgx.a")
-    endif()
-    if(EXISTS "${AMGX_DIR}/../include/amgx_c.h")
-      set(AMGX_INCLUDE_DIR "${AMGX_DIR}/../include")
-    else()
-      message(FATAL_ERROR "Could not find amgx_c.h in expected location: ${AMGX_DIR}/../include")
-    endif()
-endif()
-
 find_package(MPI)
 find_package(MKL)
+find_package(CUDAToolkit)
 
 #set (LAPACK_FOUND FALSE)
 #set (BLAS_FOUND FALSE)
@@ -405,6 +384,61 @@ else()
 
 endif()
 
+if(CUDAToolkit_FOUND)
+# TODO: Check this tomorrow
+# https://github.com/NVIDIA/AMGX/blob/666311a52c36d75f6738ecc15897840256d2cf79/examples/CMakeLists.txt
+  message(STATUS "CUDAToolkit_FOUND: ${CUDAToolkit_FOUND}")
+  message(STATUS "CUDAToolkit_INCLUDE_DIRS: ${CUDAToolkit_INCLUDE_DIRS}")
+  message(STATUS "CUDAToolkit_VERSION: ${CUDAToolkit_VERSION}")
+  message(STATUS "CUDAToolkit_BIN_DIR: ${CUDAToolkit_BIN_DIR}")
+  message(STATUS "CUDAToolkit_LIBRARY_DIR: ${CUDAToolkit_LIBRARY_DIR}")
+
+  include_directories(SYSTEM ${CUDAToolkit_INCLUDE_DIRS})
+
+  get_filename_component(CMAKE_CXX_COMPILER_NAME "${CMAKE_CXX_COMPILER}" NAME)
+  if(CMAKE_CXX_COMPILER_NAME MATCHES cl AND NOT CMAKE_CXX_COMPILER_NAME MATCHES clang)
+    set(CUDA_LIBRARIES CUDA::cusparse CUDA::cusolver CUDA::cudart CUDA::cublas)
+  else()
+    set(CUDA_LIBRARIES CUDA::cusparse CUDA::cusolver CUDA::cudart CUDA::cublas m pthread rt dl)
+  endif()
+
+  if (NOT DEFINED AMGX_NO_MPI_DIR)
+      message(STATUS "AMGX directory not defined. Please set AMGX_NO_MPI_DIR to the path of the AMGX library.")
+      set(AMGX_FLAG -D_NOAMGX)
+      set(AMGX_LIBRARIES "")
+      set(AMGX_INCLUDE_DIR "")
+      set(AMGX_SOLVER_SOURCES "")
+
+  else()
+      message(STATUS "Compiling with AMGX from ${AMGX_NO_MPI_DIR}")
+
+      set(AMGX_FLAG -D_AMGX)
+
+      if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+          set(AMGX_LIBRARIES "${AMGX_NO_MPI_DIR}/amgx.lib")
+      else()
+          set(AMGX_LIBRARIES "${AMGX_NO_MPI_DIR}/libamgx.a")
+      endif()
+      if(EXISTS "${AMGX_NO_MPI_DIR}/../include/amgx_c.h")
+        set(AMGX_INCLUDE_DIR "${AMGX_NO_MPI_DIR}/../include")
+      else()
+        message(FATAL_ERROR "Could not find amgx_c.h in expected location: ${AMGX_NO_MPI_DIR}/../include")
+      endif()
+
+      set(AMGX_SOLVER_SOURCES)
+      list(APPEND AMGX_SOLVER_SOURCES 
+          "${OPS_SRC_DIR}/system_of_eqn/linearSOE/amgx/AmgXGenLinSOE.cpp" 
+          "${OPS_SRC_DIR}/system_of_eqn/linearSOE/amgx/AmgXGenLinSolver.cpp"
+      )
+      
+      message(STATUS "AMGX support enabled.")
+      message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition ${AMGX_FLAG}")
+  endif()
+else()
+  message(STATUS "CUDAToolkit was NOT found.")
+  set(CUDA_LIBRARIES "")
+endif()
+
 message(STATUS "SCALAPACK_LIBRARIES=${SCALAPACK_LIBRARIES}")
   
 #get_cmake_property(_variableNames VARIABLES)
@@ -428,7 +462,6 @@ target_link_libraries(OPS_Numerics INTERFACE
        ${AMD_LIBRARIES}       
        ${LAPACK_LIBRARIES}
        ${EIGENAPI_LIBRARIES}
-       ${AMGX_LIBRARIES}
 )
 
 set(TCL_LIBRARIES ${TCL_LIBRARY})
@@ -567,7 +600,16 @@ target_link_libraries(OpenSeesLIB
 # OpenSees Tcl Interpreter
 #
 
+if(CUDAToolkit_FOUND)
+  get_target_property(_cusparse_loc CUDA::cusparse IMPORTED_LOCATION)
+  message(STATUS "CUDA::cusparse found at: ${_cusparse_loc}")
 
+  get_target_property(_cusolver_loc CUDA::cusolver IMPORTED_LOCATION)
+  message(STATUS "CUDA::cusolver found at: ${_cusolver_loc}")
+  
+  get_target_property(_cudart_loc CUDA::cudart IMPORTED_LOCATION)
+  message(STATUS "CUDA::cudart found at: ${_cudart_loc}")
+endif()
 
 add_executable(OpenSees EXCLUDE_FROM_ALL 
   ${OPS_SRC_DIR}/tcl/tclAppInit.cpp
@@ -575,11 +617,12 @@ add_executable(OpenSees EXCLUDE_FROM_ALL
   ${OPS_SRC_DIR}/tcl/commands.cpp
   ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
 )
-if(DEFINED AMGX_DIR)
-  message(STATUS "AMGX support enabled.")
-  message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
+
+if(CUDAToolkit_FOUND)
   target_include_directories(OpenSees PUBLIC ${AMGX_INCLUDE_DIR})
   target_compile_definitions(OpenSees PUBLIC ${AMGX_FLAG})
+  target_sources(OpenSees PRIVATE ${AMGX_SOLVER_SOURCES})
+  target_link_libraries(OpenSees ${AMGX_LIBRARIES} ${CUDA_LIBRARIES})
 endif()
 
 if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
@@ -646,13 +689,6 @@ if(MPI_FOUND)
 
     target_include_directories(OpenSeesSP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
     
-    if(DEFINED AMGX_DIR)
-      message(STATUS "AMGX support enabled.")
-      message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
-      target_include_directories(OpenSeesSP PUBLIC ${AMGX_INCLUDE_DIR})
-      target_compile_definitions(OpenSeesSP PUBLIC ${AMGX_FLAG})
-    endif()
-    
     target_compile_options(OpenSeesSP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
 
     if (DEFINED OPENMPI)
@@ -682,6 +718,13 @@ if(MPI_FOUND)
        ${MPI_CXX_LINK_FLAGS}
     )
     
+    if(CUDAToolkit_FOUND)
+      target_include_directories(OpenSeesSP PRIVATE ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesSP PUBLIC ${AMGX_FLAG})
+      target_sources(OpenSeesSP PRIVATE ${AMGX_SOLVER_SOURCES})
+      target_link_libraries(OpenSeesSP ${AMGX_LIBRARIES} ${CUDA_LIBRARIES})
+    endif()
+
 endif()
 
 
@@ -711,13 +754,6 @@ if(MPI_FOUND)
     )
 
     target_include_directories(OpenSeesMP PRIVATE ${MUMPS_DIR}/_deps/mumps-src/include ${MPI_CXX_INCLUDE_DIRS})
-    
-    if(DEFINED AMGX_DIR)
-      message(STATUS "AMGX support enabled.")
-      message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
-      target_include_directories(OpenSeesMP PUBLIC ${AMGX_INCLUDE_DIR})
-      target_compile_definitions(OpenSeesMP PUBLIC ${AMGX_FLAG})
-    endif()
 
     target_compile_options(OpenSeesMP PRIVATE ${MPI_CXX_COMPILE_FLAGS})
     
@@ -752,6 +788,12 @@ if(MPI_FOUND)
        ${MPI_CXX_LINK_FLAGS}
     )
     
+    if(CUDAToolkit_FOUND)
+      target_include_directories(OpenSeesMP PRIVATE ${AMGX_INCLUDE_DIR})
+      target_compile_definitions(OpenSeesMP PUBLIC ${AMGX_FLAG})
+      target_sources(OpenSeesMP PRIVATE ${AMGX_SOLVER_SOURCES})
+      target_link_libraries(OpenSeesMP ${AMGX_LIBRARIES} ${CUDA_LIBRARIES})
+    endif()
 endif()
 
 
@@ -768,11 +810,11 @@ set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
-if(DEFINED AMGX_DIR)
-  message(STATUS "AMGX support enabled.")
-  message(STATUS "Adding include directory ${AMGX_INCLUDE_DIR} and compile definition _AMGX")
+if(CUDAToolkit_FOUND)
   target_include_directories(OpenSeesPy PUBLIC ${AMGX_INCLUDE_DIR})
   target_compile_definitions(OpenSeesPy PUBLIC ${AMGX_FLAG})
+  target_sources(OpenSeesPy PRIVATE ${AMGX_SOLVER_SOURCES})
+  target_link_libraries(OpenSeesPy ${AMGX_LIBRARIES} ${CUDA_LIBRARIES})
 endif()
 
 target_link_libraries(OpenSeesPy

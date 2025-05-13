@@ -50,6 +50,11 @@ void defaultAmgXCallback(const char* msg, int length) {
         opserr << endln;
     }
 }
+
+void noAmgXCallback(const char* msg, int length) {
+    // Do nothing
+}
+
 #ifdef __cplusplus
 }
 #endif
@@ -76,33 +81,28 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     } else if (configOptions != nullptr && strlen(configOptions) > 0) {
         AMGX_SAFE_CALL(AMGX_config_create(&_Config, configOptions));
     } else {
-        opserr << "AmgXGenLinSOE: No config file or options provided" << endln;
-        opserr << "AmgXGenLinSOE: Using default config" << endln;
-
         /* The following settings create an Aggregation solver with DILU 
          * smoother, with 1 pre and 1 post sweep. The solver will stop when 
          * the L2 norm has been reduced by 1000 from the initial norm.
          */
         const char* defaultOptions =
             "config_version=2,"
-            "algorithm=AGGREGATION,"
-            "selector=ONE_PHASE_HANDSHAKING,"
-            "cycle=V,"
-            "smoother=MULTICOLOR_DILU,"
-            "presweeps=1,"
-            "postsweeps=1,"
-            "coarse_solver=NOSOLVER,"
-            "coarsest_sweeps=2,"
-            "max_levels=1000,"
-            "norm=L2,"
-            "convergence=RELATIVE_INI,"
-            "max_uncolored_percentage=0.15,"
-            "max_iters=1000,"
-            "monitor_residual=1,"
-            "tolerance=0.001,"
-            "print_solve_stats=1,"
-            "print_grid_stats=1,"
-            "obtain_timings=1";
+            "solver(my_krylov_solver)=PCG,"
+            "my_krylov_solver:norm=L2,"
+            "my_krylov_solver:convergence=RELATIVE_INI,"
+            "my_krylov_solver:max_iters=1000000,"
+            "my_krylov_solver:tolerance=1e-06,"
+            "my_krylov_solver:print_solve_stats=1,"
+            "my_krylov_solver:obtain_timings=1,"
+            "my_krylov_solver:monitor_residual=1,"
+            "my_krylov_solver:store_res_history=1,"
+            "my_krylov_solver:preconditioner(my_precond)=BLOCK_JACOBI,"
+            "my_precond:max_iters=1";
+
+        opserr << "AmgXGenLinSOE: No config file or options provided" << endln;
+        opserr << "AmgXGenLinSOE: Using default config below" << endln;
+        opserr << defaultOptions << endln;
+
         AMGX_SAFE_CALL(AMGX_config_create(&_Config, defaultOptions));
     }
 
@@ -118,7 +118,7 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     AMGX_resources_create_simple(&_Resources, _Config);
 
     /* Set AmgX mode */
-    if(mode == "dDDI") {
+    if(strcmp(mode, "dDDI") == 0) {
         _Mode = AMGX_mode_dDDI;
     } else {
         opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" << mode << "). Only dDDI is supported.\n";

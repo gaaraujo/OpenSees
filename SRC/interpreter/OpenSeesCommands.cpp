@@ -3711,7 +3711,8 @@ void* OPS_AmgXGenLinSolver()
         opserr << "Expected: system AmgX <-configFile configFile> ";
         opserr << "<-configOptions configOptions> <-mode mode> ";
         opserr << "<-usePinnedMemory usePinnedMemory> ";
-        opserr << "<-blockSize blockSize>" << endln;
+        opserr << "<-blockSize blockSize>";
+        opserr << "<-callback callback>" << endln;
         return nullptr;
     }
 
@@ -3766,6 +3767,20 @@ void* OPS_AmgXGenLinSolver()
                 }
                 if(blockSize < 0) {
                     opserr << "WARNING: AmgXGenLinSolver: blockSize cannot be negative\n";
+                    return nullptr;
+                }
+            } else if(strcmp(nextString,"callback") == 0 || strcmp(nextString,"-callback") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for callback" << endln;
+                    return nullptr;
+                }
+                if (strcmp(nextString,"default") == 0) {
+                    callback = defaultAmgXCallback;
+                } else if (strcmp(nextString,"none") == 0) {
+                    callback = noAmgXCallback;
+                } else {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid callback" << endln;
                     return nullptr;
                 }
             } else {

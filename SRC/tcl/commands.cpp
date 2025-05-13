@@ -3544,7 +3544,8 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       opserr << "Expected: system AmgX <-configFile configFile> ";
       opserr << "<-configOptions configOptions> <-mode mode> ";
       opserr << "<-usePinnedMemory usePinnedMemory> ";
-      opserr << "<-blockSize blockSize>" << endln;
+      opserr << "<-blockSize blockSize> ";
+      opserr << "<-callback callback>" << endln;
       return TCL_ERROR;
     }
 
@@ -3590,9 +3591,19 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
             return TCL_ERROR;
           }
           currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-callback") == 0) {
+          if (strcmp(argv[currentArg+1],"default") == 0) {
+            callback = defaultAmgXCallback;
+          } else if (strcmp(argv[currentArg+1],"none") == 0) {
+            callback = noAmgXCallback;
+          } else {
+            opserr << "WARNING: AmgXGenLinSolver: Unknown callback " << argv[currentArg+1] << endln;
+            return TCL_ERROR;
+          }
+          currentArg += 2;
         } else {
           opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
-          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize" << endln;
+          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize, -callback" << endln;
           return TCL_ERROR;
         }
       } else {

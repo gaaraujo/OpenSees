@@ -54,6 +54,7 @@
 extern "C" {
 #endif
 void defaultAmgXCallback(const char* msg, int length);
+void noAmgXCallback(const char* msg, int length);
 #ifdef __cplusplus
 }
 #endif
