@@ -95,7 +95,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     }
     
     if (size % _BlockSize != 0) {
-        opserr << "WARNING: the number of equations is not divisible by the block size. ";
+        opserr << "WARNING: the number of equations (" << size << ") is not divisible by the block size (" << _BlockSize << "). ";
         opserr << "Please provide a block size that divides the number of equations evenly, ";
         opserr << "or set the block size to 0 to automatically estimate it. -- AmgXGenLinSOE::setSize" << endln;
         return -1;

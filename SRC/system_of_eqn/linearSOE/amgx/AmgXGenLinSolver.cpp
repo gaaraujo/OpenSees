@@ -121,7 +121,7 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     if(strcmp(mode, "dDDI") == 0) {
         _Mode = AMGX_mode_dDDI;
     } else {
-        opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" << mode << "). Only dDDI is supported.\n";
+        opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" << mode << "). Only mode=dDDI is supported.\n";
         return;
     }
     /* Create solver, matrix, rhs and solution vectors */
