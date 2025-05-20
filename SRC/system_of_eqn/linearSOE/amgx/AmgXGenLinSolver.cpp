@@ -64,7 +64,7 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     const char* mode, bool usePinnedMemory,
     AMGX_print_callback callback)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
-    _matrixStructureHasChanged(true), _usePinnedMemory(usePinnedMemory)
+    _usePinnedMemory(usePinnedMemory)
 {
     /* Initialize AMGX library - only done once across all instances */
     if (!_AmgXInitialized) {
@@ -188,49 +188,54 @@ int AmgXGenLinSolver::solve() {
     }
     
     /* Upload the system matrix to the GPU */
-    if (_matrixStructureHasChanged) { /* Entire matrix needs to be reloaded*/
-        if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-            AMGX_pin_memory(
-                (void*)(theSOE->_ARowPtrBlock.data()), 
-                sizeof(int) * (numRowBlocks + 1)
+    switch (theSOE->_matrixStatus) {
+        case MatrixStatus::STRUCTURE_CHANGED: /* Entire matrix needs to be reloaded*/
+            if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
+                    AMGX_pin_memory(
+                    (void*)(theSOE->_ARowPtrBlock.data()), 
+                    sizeof(int) * (numRowBlocks + 1)
+                );
+                AMGX_pin_memory(
+                    (void*)(theSOE->_AColIdxBlock.data()), 
+                    sizeof(int) * (nnzBlocks)
+                );
+                AMGX_pin_memory(
+                    (void*)(theSOE->_AValuesBlock.data()), 
+                    sizeof(double) * (totalNNZ)
+                );
+            }
+            AMGX_matrix_upload_all(
+                _Matrix, numRowBlocks, nnzBlocks, 
+                blockSize, blockSize, theSOE->_ARowPtrBlock.data(), 
+                theSOE->_AColIdxBlock.data(), theSOE->_AValuesBlock.data(), nullptr
             );
-            AMGX_pin_memory(
-                (void*)(theSOE->_AColIdxBlock.data()), 
-                sizeof(int) * (nnzBlocks)
+            if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
+                AMGX_unpin_memory((void*)(theSOE->_ARowPtrBlock.data()));
+                AMGX_unpin_memory((void*)(theSOE->_AColIdxBlock.data()));
+                AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
+            }
+            AMGX_solver_setup(_Solver, _Matrix);
+            break;
+        case MatrixStatus::COEFFICIENTS_CHANGED: /* Only the matrix coefficients have changed */
+            if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
+                AMGX_pin_memory(
+                    (void*)(theSOE->_AValuesBlock.data()), 
+                    sizeof(double) * (totalNNZ)
+                );
+            }
+            AMGX_matrix_replace_coefficients(
+                _Matrix, numRowBlocks, nnzBlocks, 
+                theSOE->_AValuesBlock.data(), nullptr
             );
-            AMGX_pin_memory(
-                (void*)(theSOE->_AValuesBlock.data()), 
-                sizeof(double) * (totalNNZ)
-            );
-        }
-        AMGX_matrix_upload_all(
-            _Matrix, numRowBlocks, nnzBlocks, 
-            blockSize, blockSize, theSOE->_ARowPtrBlock.data(), 
-            theSOE->_AColIdxBlock.data(), theSOE->_AValuesBlock.data(), nullptr
-        );
-        if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-            AMGX_unpin_memory((void*)(theSOE->_ARowPtrBlock.data()));
-            AMGX_unpin_memory((void*)(theSOE->_AColIdxBlock.data()));
-            AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
-        }
-        _matrixStructureHasChanged = false;
-    } else { /* Only the matrix coefficients have changed */
-        if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-            AMGX_pin_memory(
-                (void*)(theSOE->_AValuesBlock.data()), 
-                sizeof(double) * (totalNNZ)
-            );
-        }
-        AMGX_matrix_replace_coefficients(
-            _Matrix, numRowBlocks, nnzBlocks, 
-            theSOE->_AValuesBlock.data(), nullptr
-        );
-        if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-            AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
-        }
+            if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
+                AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
+            }
+            AMGX_solver_setup(_Solver, _Matrix);
+            break;
+        case MatrixStatus::UNCHANGED: /* Matrix is the same as the previous solve */
+            /* Do nothing */
+            break;
     }
-
-    AMGX_solver_setup(_Solver, _Matrix);
 
     /* Upload the RHS vector to the GPU*/
     double* X_ptr = &(theSOE->_X(0));
@@ -260,18 +265,21 @@ int AmgXGenLinSolver::solve() {
         opserr << "WARNING: Solver diverged -- AmgXGenLinSolver::solve" << endln;
         opserr << "AmgXGenLinSolver::getNumIterations() = " << this->getNumIterations() << endln;
         opserr << "AmgXGenLinSolver::getFinalResidualNorm() = " << this->getFinalResidualNorm() << endln;
+        return -1;
     }
     if (status != AMGX_SOLVE_SUCCESS) {
         opserr << "WARNING: solving returns " << status << " -- AmgXGenLinSolver::solve" << endln;
         return -1;
     }
 
+    /* Update matrix status for future solves */
+    theSOE->_matrixStatus = MatrixStatus::UNCHANGED;
+    
     return 0;
 }
 
 int AmgXGenLinSolver::setSize()
 {
-    _matrixStructureHasChanged = true;
     return 0;
 }
 

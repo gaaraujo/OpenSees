@@ -66,11 +66,21 @@ class AmgXGenLinSOE : public LinearSOE
         int sendSelf(int commitTag, Channel &theChannel);   
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);  
 
+        // Track changes in the matrix
+        enum AmgXMatrixStatus {
+            UNCHANGED, // Matrix is the same as the last solve
+            COEFFICIENTS_CHANGED, // Only the coefficients of the matrix have changed
+            STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
+        };
+
         friend class AmgXGenLinSolver;
 
     protected:
 
     private:    
+        // Track the status of the matrix
+        AmgXMatrixStatus _matrixStatus;
+
         // RHS and solution vectors
         Vector _X, _B;
 

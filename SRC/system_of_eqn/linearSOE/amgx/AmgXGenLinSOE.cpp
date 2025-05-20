@@ -45,13 +45,15 @@
 
 AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, int blockSize)
     : LinearSOE(the_Solver, LinSOE_TAGS_AmgXGenLinSOE), 
-    _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), _BlockSize(blockSize)
+    _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), 
+    _BlockSize(blockSize), _matrixStatus(AmgXMatrixStatus::STRUCTURE_CHANGED)
 {
     the_Solver.setLinearSOE(*this);
 }
 
 AmgXGenLinSOE::AmgXGenLinSOE(): LinearSOE(LinSOE_TAGS_AmgXGenLinSOE), 
-    _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), _BlockSize()
+    _X(), _B(), _ARowPtrBlock(), _AColIdxBlock(), _AValuesBlock(), 
+    _BlockSize(0), _matrixStatus(AmgXMatrixStatus::STRUCTURE_CHANGED)
 {
     
 }
@@ -100,6 +102,11 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
         opserr << "or set the block size to 0 to automatically estimate it. -- AmgXGenLinSOE::setSize" << endln;
         return -1;
     }
+
+    // Clear the matrix structure
+    _ARowPtrBlock.clear();
+    _AColIdxBlock.clear();
+    _AValuesBlock.clear();
 
     // Special case for BlockSize = 1 - treat as regular CSR format
     if (_BlockSize == 1) {
@@ -197,6 +204,9 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     // Allocate solution and RHS vectors
     _X.resize(size); _X.Zero();
     _B.resize(size); _B.Zero();
+
+    // Update matrix status
+    _matrixStatus = AmgXMatrixStatus::STRUCTURE_CHANGED;
 
     // invoke setSize() on the Solver
     LinearSOESolver *the_Solver = this->getSolver();
@@ -319,6 +329,12 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
             }
         }
     }
+
+    // Update matrix status
+    if (_matrixStatus == AmgXMatrixStatus::UNCHANGED) {
+        _matrixStatus = AmgXMatrixStatus::COEFFICIENTS_CHANGED;
+    }
+
     return 0;
 }
 
@@ -389,6 +405,11 @@ int AmgXGenLinSOE::setB(const Vector &v, double fact)
 void AmgXGenLinSOE::zeroA(void)
 {
     _AValuesBlock.assign(_AValuesBlock.size(),0.0);
+
+    // Update matrix status
+    if (_matrixStatus == AmgXMatrixStatus::UNCHANGED) {
+        _matrixStatus = AmgXMatrixStatus::COEFFICIENTS_CHANGED;
+    }
 }
 
 void AmgXGenLinSOE::zeroB(void)

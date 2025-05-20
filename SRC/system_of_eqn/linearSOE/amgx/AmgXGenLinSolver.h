@@ -79,12 +79,13 @@ class AmgXGenLinSolver : public LinearSOESolver
         int getNumIterations();
         double getFinalResidualNorm();
 
+        using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
     protected:
 
     private:
         AmgXGenLinSOE *theSOE;
         bool _usePinnedMemory;
-        bool _matrixStructureHasChanged;
+        //bool _matrixStructureHasChanged;
 
         // Static members for global state
         static bool _AmgXInitialized;           ///< Whether AMGX is initialized
