@@ -3544,6 +3544,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       opserr << "Expected: system AmgX <-configFile configFile> ";
       opserr << "<-configOptions configOptions> <-mode mode> ";
       opserr << "<-usePinnedMemory usePinnedMemory> ";
+      opserr << "<-verbose verbose> ";
       opserr << "<-blockSize blockSize> ";
       opserr << "<-callback callback>" << endln;
       return TCL_ERROR;
@@ -3553,6 +3554,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     std::string configOptionsStr = ""; 
     std::string modeStr = "dDDI";
     bool usePinnedMemory = true;
+    bool verbose = false;
     AMGX_print_callback callback = defaultAmgXCallback;
     int blockSize = 1;
 
@@ -3576,14 +3578,22 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
         } else if (strcmp(argv[currentArg],"-usePinnedMemory") == 0) {
           int flag = 1;
           if (Tcl_GetInt(interp, argv[currentArg+1], &flag) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid value for usePinnedMemory\n";
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for usePinnedMemory. Expected 0 or 1\n";
             return TCL_ERROR;
           }
           usePinnedMemory = (flag == 1);
           currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-verbose") == 0) {
+          int flag = 0;
+          if (Tcl_GetInt(interp, argv[currentArg+1], &flag) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for verbose. Expected 0 or 1\n";
+            return TCL_ERROR;
+          }
+          verbose = (flag == 1);
+          currentArg += 2;
         } else if (strcmp(argv[currentArg],"-blockSize") == 0) {
           if (Tcl_GetInt(interp, argv[currentArg+1], &blockSize) != TCL_OK) {
-            opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize\n";
+            opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize. Expected integer\n";
             return TCL_ERROR;
           }
           if (blockSize < 0) {
@@ -3603,7 +3613,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
           currentArg += 2;
         } else {
           opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
-          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize, -callback" << endln;
+          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -verbose, -blockSize, -callback" << endln;
           return TCL_ERROR;
         }
       } else {
@@ -3612,7 +3622,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     }
 
     AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
-        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, callback
+        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
     );
     theSOE = new AmgXGenLinSOE(*theSolver, blockSize);
   }

@@ -65,7 +65,7 @@ class AmgXGenLinSolver : public LinearSOESolver
 {
     public:
         AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr, 
-            const char* mode = "dDDI", bool usePinnedMemory = true,
+            const char* mode = "dDDI", bool usePinnedMemory = true, bool verbose = false,
             AMGX_print_callback callback = defaultAmgXCallback);
         ~AmgXGenLinSolver();
         
@@ -77,7 +77,7 @@ class AmgXGenLinSolver : public LinearSOESolver
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
 
         int getNumIterations();
-        double getFinalResidualNorm();
+        double getResidualNorm();
 
         using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
     protected:
@@ -85,15 +85,15 @@ class AmgXGenLinSolver : public LinearSOESolver
     private:
         AmgXGenLinSOE *theSOE;
         bool _usePinnedMemory;
-        //bool _matrixStructureHasChanged;
+        bool _verbose;
 
         // Static members for global state
         static bool _AmgXInitialized;           ///< Whether AMGX is initialized
         static int _ActiveSolverInstances;     ///< Count of active solver instances
-
+        static AMGX_resources_handle _Resources;  ///< Resources handle
+        
         // AMGX handles
         AMGX_config_handle    _Config       = nullptr;  ///< Configuration handle
-        AMGX_resources_handle _Resources    = nullptr;  ///< Resources handle
         AMGX_matrix_handle    _Matrix       = nullptr;  ///< Matrix handle
         AMGX_vector_handle    _RHS          = nullptr;  ///< Right-hand side vector handle
         AMGX_vector_handle    _Solution     = nullptr;  ///< Solution vector handle

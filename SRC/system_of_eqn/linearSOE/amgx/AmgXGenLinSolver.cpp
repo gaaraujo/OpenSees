@@ -40,7 +40,9 @@
 // Static member initialization
 bool AmgXGenLinSolver::_AmgXInitialized = false;
 int AmgXGenLinSolver::_ActiveSolverInstances = 0;
+AMGX_resources_handle AmgXGenLinSolver::_Resources = nullptr;
 
+/* AMGX callbacks */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -59,12 +61,26 @@ void noAmgXCallback(const char* msg, int length) {
 }
 #endif
 
+/* Anonymous namespace for helper functions */
+namespace {
+    void reportAmgXSolveStats(int numIterations, double initialResidualNorm, double finalResidualNorm) {
+        opserr << "AmgXGenLinSolver: Number of iterations = " << numIterations << endln;
+        opserr << "AmgXGenLinSolver: Initial residual norm = " << initialResidualNorm << endln;
+        opserr << "AmgXGenLinSolver: Final residual norm = " << finalResidualNorm << endln;
+        if (initialResidualNorm > 0.0) {
+            opserr << "AmgXGenLinSolver: Final to initial residual norm ratio = " << finalResidualNorm / initialResidualNorm << endln;
+        } else {
+            opserr << "AmgXGenLinSolver: Final to initial residual norm ratio = NaN" << endln;
+        }
+    }
+}
+
 AmgXGenLinSolver::AmgXGenLinSolver( 
     const char *configFile, const char *configOptions, 
-    const char* mode, bool usePinnedMemory,
+    const char* mode, bool usePinnedMemory, bool verbose,
     AMGX_print_callback callback)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
-    _usePinnedMemory(usePinnedMemory)
+    _usePinnedMemory(usePinnedMemory), _verbose(verbose)
 {
     /* Initialize AMGX library - only done once across all instances */
     if (!_AmgXInitialized) {
@@ -81,41 +97,78 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     } else if (configOptions != nullptr && strlen(configOptions) > 0) {
         AMGX_SAFE_CALL(AMGX_config_create(&_Config, configOptions));
     } else {
-        /* The following settings create an Aggregation solver with DILU 
-         * smoother, with 1 pre and 1 post sweep. The solver will stop when 
-         * the L2 norm has been reduced by 1000 from the initial norm.
-         */
-        const char* defaultOptions =
+        /* The following settings create a preconditioned conjugate gradient 
+        * solver with an AMG preconditioner. The AMG preconditioner is a V-cycle 
+        * AMG solver with a JACOBI_L1 smoother.
+        * The solver will stop when the L2 norm has either been reduced by 6 
+        * orders of magnitude from the initial norm or the absolute norm is less 
+        * than 1e-10.
+        * These settings are based on the default config file used by the 
+        * AmgXWrapper from MFEM in 
+        * https://docs.mfem.org/html/amgxsolver_8cpp_source.html.
+        */
+        std::string defaultOptions =
             "config_version=2,"
-            "solver(my_krylov_solver)=PCG,"
-            "my_krylov_solver:norm=L2,"
-            "my_krylov_solver:convergence=RELATIVE_INI,"
-            "my_krylov_solver:max_iters=1000000,"
-            "my_krylov_solver:tolerance=1e-06,"
-            "my_krylov_solver:print_solve_stats=1,"
-            "my_krylov_solver:obtain_timings=1,"
-            "my_krylov_solver:monitor_residual=1,"
-            "my_krylov_solver:store_res_history=1,"
-            "my_krylov_solver:preconditioner(my_precond)=BLOCK_JACOBI,"
-            "my_precond:max_iters=1";
+            "solver(main)=PCG,"
+            "main:norm=L2,"
+            "main:convergence=COMBINED_REL_INI_ABS,"
+            "main:max_iters=1000,"
+            "main:tolerance=1e-10,"
+            "main:alt_rel_tolerance=1e-6,"
+            "main:monitor_residual=1,"
+            "main:preconditioner(amg)=AMG,"
+            "amg:smoother(jacobi)=JACOBI_L1,"
+            "amg:presweeps=1,"
+            "amg:interpolator=D2,"
+            "amg:max_row_sum=0.9,"
+            "amg:strength_threshold=0.25,"
+            "amg:max_iters=1,"
+            "amg:max_levels=100,"
+            "amg:cycle=V,"
+            "amg:postsweeps=1";
 
-        opserr << "AmgXGenLinSOE: No config file or options provided" << endln;
-        opserr << "AmgXGenLinSOE: Using default config below" << endln;
-        opserr << defaultOptions << endln;
-
-        AMGX_SAFE_CALL(AMGX_config_create(&_Config, defaultOptions));
+        AMGX_SAFE_CALL(AMGX_config_create(&_Config, defaultOptions.c_str()));
     }
 
-    /* Monitor residual and store residual history 
-     * (required for AmgXGenLinSolver::getFinalResidualNorm) */
-    AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, "monitor_residual=1,store_res_history=1"));
+    /* Print some stuff to the console */
+    if (_verbose) {
+        /* Note: Certain parameters are specific to a solver scope, which only
+         * AMGX knows about. While one could in theory try to extract the scope
+         * from the config file or string passed, it would require putting some
+         * effort into parsing the config file or string.
+         * As a workaround, we just hardcode some typical solver scope names,
+         * with "default_sub_solver" being the default scope for the main solver
+         * assigned by AMGX when the user does not specify a scope and "main" being
+         * a common name for the main solver scope used in AMGX examples.
+        */
+        const std::vector<std::string> scopes = {
+            "main", "default_sub_solver"
+            };
+        /* Main solver settings */
+        for (const std::string& scope : scopes) {
+            std::string params = 
+                "config_version=2," +
+                scope + ":obtain_timings=1," +
+                scope + ":print_solve_stats=1," +
+                scope + ":print_grid_stats=1," +
+                scope + ":print_config=1";
+            AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, params.c_str()));
+        }
+    }
 
     /* Switch on internal error handling 
      * (no need to use AMGX_SAFE_CALL after this point) */
     AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, "exception_handling=1"));
 
-    /* Create resources: single-GPU and single-threaded applications only */
-    AMGX_resources_create_simple(&_Resources, _Config);
+    /* Create resources: single-GPU and single-threaded applications only.
+     * Note: Resource objects are not thread-safe. Therefore, we need to 
+     * make sure only one is created. See below for more details. 
+     * https://github.com/NVIDIA/AMGX/issues/109#issuecomment-674046246
+     * https://github.com/barbagroup/AmgXWrapper/blob/ab70b5e7bc1248875040814edef7474ad18349af/src/AmgXSolver.hpp#L335C12-L337C57 
+     */
+    if (_ActiveSolverInstances == 0) {
+        AMGX_resources_create_simple(&_Resources, _Config);
+    }
 
     /* Set AmgX mode */
     if(strcmp(mode, "dDDI") == 0) {
@@ -134,25 +187,30 @@ AmgXGenLinSolver::AmgXGenLinSolver(
 }
 
 AmgXGenLinSolver::~AmgXGenLinSolver() {
-    /* destroy resources, matrix, vector and solver */
-    if (_Solution) { AMGX_vector_destroy(_Solution); _Solution = nullptr; }
-    if (_RHS) { AMGX_vector_destroy(_RHS); _RHS = nullptr; }
-    if (_Matrix) { AMGX_matrix_destroy(_Matrix); _Matrix = nullptr; }
-    if (_Solver) { AMGX_solver_destroy(_Solver); _Solver = nullptr; }
-    if (_Resources) { AMGX_resources_destroy(_Resources); _Resources = nullptr; }
+    /* AMGX solver destroy must be called prior to AMGX matrix destroy. 
+      See AMGX Reference Manual V2.0 (2017), Section 1.4.2 */
+    AMGX_solver_destroy(_Solver);
+
+    /* Destroy matrix and vectors */
+    AMGX_vector_destroy(_Solution);
+    AMGX_vector_destroy(_RHS);
+    AMGX_matrix_destroy(_Matrix);
     
-    /* destroy config (need to use AMGX_SAFE_CALL after this point) */
-    if (_Config) { AMGX_SAFE_CALL(AMGX_config_destroy(_Config)); _Config = nullptr; }
-
-    if (_ActiveSolverInstances > 0) {
-        _ActiveSolverInstances--;
-    }
-
-    // Finalize AMGX only when last instance is destroyed
-    if (_ActiveSolverInstances == 0 && _AmgXInitialized) {
+    /* Finalize AMGX only when last instance is destroyed. 
+       Otherwise, just destroy the config */
+    if (_ActiveSolverInstances == 1) {
+        AMGX_resources_destroy(_Resources);
+        /* need to use AMGX_SAFE_CALL after this point */
+        AMGX_SAFE_CALL(AMGX_config_destroy(_Config));
         AMGX_reset_signal_handler();
         AMGX_SAFE_CALL(AMGX_finalize());
         _AmgXInitialized = false;
+    } else {
+        AMGX_config_destroy(_Config);
+    }
+
+    if (_ActiveSolverInstances > 0) {
+        _ActiveSolverInstances--;
     }
 }
 
@@ -191,18 +249,22 @@ int AmgXGenLinSolver::solve() {
     switch (theSOE->_matrixStatus) {
         case MatrixStatus::STRUCTURE_CHANGED: /* Entire matrix needs to be reloaded*/
             if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-                    AMGX_pin_memory(
+                /* WARNING: Even though, internal error handling has been 
+                 * requested, AMGX_SAFE_CALL needs to be used on this system 
+                 * call. It is an exception to the general rule.
+                 */
+                AMGX_SAFE_CALL(AMGX_pin_memory(
                     (void*)(theSOE->_ARowPtrBlock.data()), 
                     sizeof(int) * (numRowBlocks + 1)
-                );
-                AMGX_pin_memory(
+                ));
+                AMGX_SAFE_CALL(AMGX_pin_memory(
                     (void*)(theSOE->_AColIdxBlock.data()), 
                     sizeof(int) * (nnzBlocks)
-                );
-                AMGX_pin_memory(
+                ));
+                AMGX_SAFE_CALL(AMGX_pin_memory(
                     (void*)(theSOE->_AValuesBlock.data()), 
                     sizeof(double) * (totalNNZ)
-                );
+                ));
             }
             AMGX_matrix_upload_all(
                 _Matrix, numRowBlocks, nnzBlocks, 
@@ -210,25 +272,25 @@ int AmgXGenLinSolver::solve() {
                 theSOE->_AColIdxBlock.data(), theSOE->_AValuesBlock.data(), nullptr
             );
             if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-                AMGX_unpin_memory((void*)(theSOE->_ARowPtrBlock.data()));
-                AMGX_unpin_memory((void*)(theSOE->_AColIdxBlock.data()));
-                AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->_ARowPtrBlock.data())));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->_AColIdxBlock.data())));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data())));
             }
             AMGX_solver_setup(_Solver, _Matrix);
             break;
         case MatrixStatus::COEFFICIENTS_CHANGED: /* Only the matrix coefficients have changed */
             if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-                AMGX_pin_memory(
+                AMGX_SAFE_CALL(AMGX_pin_memory(
                     (void*)(theSOE->_AValuesBlock.data()), 
                     sizeof(double) * (totalNNZ)
-                );
+                ));
             }
             AMGX_matrix_replace_coefficients(
                 _Matrix, numRowBlocks, nnzBlocks, 
                 theSOE->_AValuesBlock.data(), nullptr
             );
             if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-                AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data()));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->_AValuesBlock.data())));
             }
             AMGX_solver_setup(_Solver, _Matrix);
             break;
@@ -241,40 +303,43 @@ int AmgXGenLinSolver::solve() {
     double* X_ptr = &(theSOE->_X(0));
     double* B_ptr = &(theSOE->_B(0));
     if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-        AMGX_pin_memory((void*)(B_ptr), sizeof(double) * (theSOE->_B.Size()));
-        AMGX_pin_memory((void*)(X_ptr), sizeof(double) * (theSOE->_X.Size()));
+        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(B_ptr), sizeof(double) * (theSOE->_B.Size())));
+        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(X_ptr), sizeof(double) * (theSOE->_X.Size())));
     }
     AMGX_vector_upload(_RHS, numRowBlocks, blockSize, B_ptr);
     
     /* Solve with 0-vector initial guess */
     AMGX_vector_set_zero(_Solution, numRowBlocks, blockSize);
+    double initialResidualNorm = this->getResidualNorm();
     AMGX_solver_solve_with_0_initial_guess(_Solver, _RHS, _Solution);
+    double finalResidualNorm = this->getResidualNorm();
 
     /* Download the solution vector from the GPU */
     AMGX_vector_download(_Solution, X_ptr);
     if (_Mode == AMGX_mode_dDDI && _usePinnedMemory) {
-        AMGX_unpin_memory((void*)(X_ptr));
-        AMGX_unpin_memory((void*)(B_ptr));
+        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(X_ptr)));
+        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(B_ptr)));
     }
 
     /* AMGX check status */
     AMGX_SOLVE_STATUS status;
     AMGX_solver_get_status(_Solver, &status);
 
-    if (status == AMGX_SOLVE_DIVERGED) {
-        opserr << "WARNING: Solver diverged -- AmgXGenLinSolver::solve" << endln;
-        opserr << "AmgXGenLinSolver::getNumIterations() = " << this->getNumIterations() << endln;
-        opserr << "AmgXGenLinSolver::getFinalResidualNorm() = " << this->getFinalResidualNorm() << endln;
-        return -1;
-    }
     if (status != AMGX_SOLVE_SUCCESS) {
-        opserr << "WARNING: solving returns " << status << " -- AmgXGenLinSolver::solve" << endln;
+        opserr << "WARNING: Solver failed with status " << status << " -- AmgXGenLinSolver::solve" << endln;
+        if (status != AMGX_SOLVE_FAILED) {
+            reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
+        }
         return -1;
     }
 
     /* Update matrix status for future solves */
     theSOE->_matrixStatus = MatrixStatus::UNCHANGED;
-    
+
+    if (_verbose) {
+        opserr << "AmgXGenLinSolver: Solve successful" << endln;
+        reportAmgXSolveStats(this->getNumIterations(), initialResidualNorm, finalResidualNorm);
+    }
     return 0;
 }
 
@@ -305,16 +370,25 @@ int AmgXGenLinSolver::recvSelf(int ctag,
 
 int AmgXGenLinSolver::getNumIterations() {
     int numIterations;
+    if (_Solver == nullptr) {
+        opserr << "WARNING: AmgXGenLinSolver::getNumIterations: Solver not initialized" << endln;
+        return 0;
+    }
     AMGX_solver_get_iterations_number(_Solver, &numIterations);
     return numIterations;
 }
 
-double AmgXGenLinSolver::getFinalResidualNorm() {
-    double residualComponent;
-    double finalResidualNorm = 0.0;
-    for (int blockIdx = 0; blockIdx < theSOE->_BlockSize; blockIdx++) {
-        AMGX_solver_get_iteration_residual(_Solver, this->getNumIterations(), blockIdx, &residualComponent);
-        finalResidualNorm += residualComponent * residualComponent;
+double AmgXGenLinSolver::getResidualNorm() {
+    if (_Solver == nullptr || _Matrix == nullptr || _RHS == nullptr || _Solution == nullptr || theSOE == nullptr) {
+        opserr << "WARNING: AmgXGenLinSolver::getResidualNorm: Solver, matrix, RHS, solution vector or LinearSOE not initialized" << endln;
+        return 0.0;
     }
+    double finalResidualNorm = 0.0;
+    void* residualComponent = calloc(theSOE->_BlockSize, sizeof(double));
+    AMGX_solver_calculate_residual_norm(_Solver, _Matrix, _RHS, _Solution, residualComponent);
+    for (int i = 0; i < theSOE->_BlockSize; i++) {
+        finalResidualNorm += ((double*)residualComponent)[i] * ((double*)residualComponent)[i];
+    }
+    free(residualComponent);
     return std::sqrt(finalResidualNorm);
 }

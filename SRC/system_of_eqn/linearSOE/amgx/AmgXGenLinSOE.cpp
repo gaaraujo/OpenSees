@@ -154,15 +154,19 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
         // Prepare block structure
         _ARowPtrBlock.resize(numBlockRows + 1, 0);
         std::vector<int> mask(numBlockCols, -1);
-        std::vector<ID> colIdxPerBlockRow(numBlockRows);
+        std::vector<ID> colIdxPerBlockRow(numBlockRows); // using ID because it automatically sorts the entries
 
-        // Loop over vertices (rows), and their adjacency (columns)
-        // Note: this assumes the graph is undirected
-        VertexIter &theVertices = theGraph.getVertices();
-        Vertex* theVertex = nullptr;
-
-        while ((theVertex = theVertices()) != nullptr) {
-            int row = theVertex->getTag();  // global scalar row index
+        /* Note: graph vertices need to be processed ordered by their tags for 
+         * the following loop to work correctly.
+         */
+        for (int row = 0; row < size; ++row) {
+            theVertex = theGraph.getVertexPtr(row);
+            if (theVertex == nullptr) {
+                opserr << "WARNING: AmgXGenLinSOE::setSize :"
+                    << " vertex " << row << " not in graph! - size set to 0\n";
+                size = 0;
+                return -1;
+            }
             int blockRow = row / _BlockSize;
 
             const ID& theAdjacency = theVertex->getAdjacency();  // connected columns
@@ -184,7 +188,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             }
         }
 
-        // Finalize _ARowPtrBlock and sort
+        // Fill _ARowPtrBlock
         for (int blockRow = 0; blockRow < numBlockRows; ++blockRow) {
             _ARowPtrBlock[blockRow + 1] = _ARowPtrBlock[blockRow] + colIdxPerBlockRow[blockRow].Size();
         }
@@ -568,6 +572,8 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
     std::vector<int> mask(numBlockCols, -1);
     int totalNumBlocks = 0;
 
+    // Note: graph vertices need to be processed ordered by their tags for 
+    // the following loop to work correctly.
     for (int i = 0; i < size; i++) {
         int blockRow = i / blockSize;
         Vertex* theVertex = theGraph.getVertexPtr(i);

@@ -3700,6 +3700,7 @@ void* OPS_AmgXGenLinSolver()
     std::string configOptionsStr = ""; 
     std::string modeStr = "dDDI";
     bool usePinnedMemory = true;
+    bool verbose = false;
     AMGX_print_callback callback = defaultAmgXCallback;
     int blockSize = 1;
 
@@ -3712,6 +3713,7 @@ void* OPS_AmgXGenLinSolver()
         opserr << "<-configOptions configOptions> <-mode mode> ";
         opserr << "<-usePinnedMemory usePinnedMemory> ";
         opserr << "<-blockSize blockSize>";
+        opserr << "<-verbose verbose>";
         opserr << "<-callback callback>" << endln;
         return nullptr;
     }
@@ -3759,10 +3761,19 @@ void* OPS_AmgXGenLinSolver()
                     return nullptr;
                 }
                 usePinnedMemory = (flag == 1);
+            } else if(strcmp(nextString,"verbose") == 0 || strcmp(nextString,"-verbose") == 0) {
+                int numData = 1;
+                int flag = 0;
+                if(OPS_GetIntInput(&numData, &flag) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for verbose";
+                    opserr << "Expected: verbose <0|1>\n";
+                    return nullptr;
+                }
+                verbose = (flag == 1);
             } else if(strcmp(nextString,"blockSize") == 0 || strcmp(nextString,"-blockSize") == 0) {
                 int numData = 1;
                 if(OPS_GetIntInput(&numData, &blockSize) < 0) {
-                    opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize\n";
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid blockSize. Expected integer\n";
                     return nullptr;
                 }
                 if(blockSize < 0) {
@@ -3785,7 +3796,7 @@ void* OPS_AmgXGenLinSolver()
                 }
             } else {
                 opserr << "WARNING: AmgXGenLinSolver: Unknown option " << nextString << endln;
-                opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -blockSize" << endln;
+                opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -verbose, -blockSize" << endln;
                 return nullptr;
             }
         } else {
@@ -3795,7 +3806,7 @@ void* OPS_AmgXGenLinSolver()
     }
 
     AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
-        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, callback
+        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
     );
     return new AmgXGenLinSOE(*theSolver, blockSize);
     #endif
