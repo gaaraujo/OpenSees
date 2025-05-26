@@ -36,7 +36,9 @@
 #include <FEM_ObjectBroker.h>
 #include <OPS_Stream.h>
 #include <elementAPI.h>
-#include <string>
+#include <sstream>
+#include <iomanip>
+
 // Static member initialization
 bool AmgXGenLinSolver::_AmgXInitialized = false;
 int AmgXGenLinSolver::_ActiveSolverInstances = 0;
@@ -73,6 +75,106 @@ namespace {
             opserr << "AmgXGenLinSolver: Final to initial residual norm ratio = NaN" << endln;
         }
     }
+
+    std::string getDefaultConfigOptions(std::string solver = "PCG", 
+                                        std::string preconditioner = "AMG", 
+                                        std::string smoother = "JACOBI_L1",
+                                        int max_iters = 1000,
+                                        double abs_tolerance = 1e-12,
+                                        double rel_tolerance = 1e-6,
+                                        int monitor_residual = 1) 
+    {
+        /* These settings configure a PCG solver with a V-cycle AMG preconditioner
+         * using a JACOBI_L1 smoother. Convergence is reached when the L2 norm
+         * drops by 6 orders of magnitude relative to the initial norm or below 
+         * 1e-12 absolute. Based on MFEM's AmgXWrapper defaults:
+         * https://docs.mfem.org/html/amgxsolver_8cpp_source.html
+        */
+        if (solver != "PCG" && solver != "FGMRES" && solver != "PCGF") {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with solver = " << solver.c_str() << ".";
+            opserr << "Default config constructor only works with solver = PCG, PCGF, or FGMRES.";
+            opserr << "To use a different solver, pass a config file or config string to the constructor using: " << endln;
+            opserr << "system AmgX <-configFile CONFIG_FILE> <-configOptions CONFIG_OPTIONS>" << endln;
+            opserr << "For more information, see the AMGX documentation." << endln;
+            return "";
+        }
+        if (preconditioner != "AMG" && preconditioner != "BLOCK_JACOBI" && preconditioner != "JACOBI_L1") {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with preconditioner = " << preconditioner.c_str() << ".";
+            opserr << "Default config constructor only works with preconditioner = AMG, BLOCK_JACOBI, or JACOBI_L1.";
+            opserr << "To use a different preconditioner, pass a config file or config string to the constructor using: " << endln;
+            opserr << "system AmgX <-configFile CONFIG_FILE> <-configOptions CONFIG_OPTIONS>" << endln;
+            opserr << "For more information, see the AMGX documentation." << endln;
+            return "";
+        }
+        if (preconditioner == "AMG" && (smoother != "JACOBI_L1" && smoother != "BLOCK_JACOBI")) {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default AMG preconditioner with smoother = " << smoother.c_str() << ".";
+            opserr << "Default AMG preconditioner only works with smoother = JACOBI_L1 or BLOCK_JACOBI.";
+            opserr << "To use a different smoother, pass a config file or config string to the constructor using: " << endln;
+            opserr << "system AmgX <-configFile CONFIG_FILE> <-configOptions CONFIG_OPTIONS>" << endln;
+            opserr << "For more information, see the AMGX documentation." << endln;
+            return "";
+        }
+
+        if (max_iters <= 0) {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with max_iters = " << max_iters << ".";
+            opserr << "Expected max_iters > 0.";
+            return "";
+        }
+        if (abs_tolerance < 0.0) {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with abs_tolerance = " << abs_tolerance << ".";
+            opserr << "Expected abs_tolerance >= 0.0.";
+            return "";
+        }
+        if (rel_tolerance < 0.0) {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with rel_tolerance = " << rel_tolerance << ".";
+            opserr << "Expected rel_tolerance >= 0.0.";
+            return "";
+        }
+        if (monitor_residual != 0 && monitor_residual != 1) {
+            opserr << "WARNING: AmgXGenLinSolver: Tried to create default config with monitor_residual = " << monitor_residual << ".";
+            opserr << "Expected monitor_residual = 0 or 1.";
+            return "";
+        }
+
+        std::ostringstream defaultOptions;
+        defaultOptions << std::setprecision(16);
+        defaultOptions << "config_version=2,";
+        defaultOptions << "solver(main)=" << solver << ",";
+        defaultOptions << "main:norm=L2,";
+        defaultOptions << "main:convergence=COMBINED_REL_INI_ABS,";
+        defaultOptions << "main:max_iters=" << max_iters << ",";
+        defaultOptions << "main:tolerance=" << abs_tolerance << ",";
+        defaultOptions << "main:alt_rel_tolerance=" << rel_tolerance << ",";
+        defaultOptions << "main:monitor_residual=" << monitor_residual << ",";
+        defaultOptions << "main:preconditioner(precond)=" << preconditioner << ",";
+        defaultOptions << "precond:max_iters=1,";
+
+        if (preconditioner == "AMG") {
+            defaultOptions << "precond:smoother(smoother)=" << smoother << ",";
+            defaultOptions << "precond:presweeps=1,";
+            defaultOptions << "precond:interpolator=D2,";
+            defaultOptions << "precond:max_row_sum=0.9,";
+            defaultOptions << "precond:strength_threshold=0.25,";
+            defaultOptions << "precond:max_levels=100,";
+            defaultOptions << "precond:cycle=V,";
+            defaultOptions << "precond:postsweeps=1";
+        }
+        return defaultOptions.str();
+    }
+}
+
+AmgXGenLinSolver::AmgXGenLinSolver(
+    const std::string solver, const std::string preconditioner, const std::string smoother, 
+    int max_iters, double abs_tolerance, double rel_tolerance, int monitor_residual, 
+    const std::string mode, bool usePinnedMemory, bool verbose)
+    :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
+    _usePinnedMemory(usePinnedMemory), _verbose(verbose)
+{
+    std::string configOptions = getDefaultConfigOptions(
+        solver, preconditioner, smoother, max_iters, 
+        abs_tolerance, rel_tolerance, monitor_residual);
+    const char* nullConfigFile = nullptr;
+    _init(nullConfigFile, configOptions.c_str(), mode.c_str());
 }
 
 AmgXGenLinSolver::AmgXGenLinSolver( 
@@ -81,6 +183,12 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     AMGX_print_callback callback)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
     _usePinnedMemory(usePinnedMemory), _verbose(verbose)
+{
+    _init(configFile, configOptions, mode, callback);
+}
+
+void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions, 
+                        const char* mode, AMGX_print_callback callback) 
 {
     /* Initialize AMGX library - only done once across all instances */
     if (!_AmgXInitialized) {
@@ -97,50 +205,18 @@ AmgXGenLinSolver::AmgXGenLinSolver(
     } else if (configOptions != nullptr && strlen(configOptions) > 0) {
         AMGX_SAFE_CALL(AMGX_config_create(&_Config, configOptions));
     } else {
-        /* The following settings create a preconditioned conjugate gradient 
-        * solver with an AMG preconditioner. The AMG preconditioner is a V-cycle 
-        * AMG solver with a JACOBI_L1 smoother.
-        * The solver will stop when the L2 norm has either been reduced by 6 
-        * orders of magnitude from the initial norm or the absolute norm is less 
-        * than 1e-10.
-        * These settings are based on the default config file used by the 
-        * AmgXWrapper from MFEM in 
-        * https://docs.mfem.org/html/amgxsolver_8cpp_source.html.
-        */
-        std::string defaultOptions =
-            "config_version=2,"
-            "solver(main)=PCG,"
-            "main:norm=L2,"
-            "main:convergence=COMBINED_REL_INI_ABS,"
-            "main:max_iters=1000,"
-            "main:tolerance=1e-10,"
-            "main:alt_rel_tolerance=1e-6,"
-            "main:monitor_residual=1,"
-            "main:preconditioner(amg)=AMG,"
-            "amg:smoother(jacobi)=JACOBI_L1,"
-            "amg:presweeps=1,"
-            "amg:interpolator=D2,"
-            "amg:max_row_sum=0.9,"
-            "amg:strength_threshold=0.25,"
-            "amg:max_iters=1,"
-            "amg:max_levels=100,"
-            "amg:cycle=V,"
-            "amg:postsweeps=1";
+        std::string defaultOptions = getDefaultConfigOptions();
 
         AMGX_SAFE_CALL(AMGX_config_create(&_Config, defaultOptions.c_str()));
     }
 
     /* Print some stuff to the console */
     if (_verbose) {
-        /* Note: Certain parameters are specific to a solver scope, which only
-         * AMGX knows about. While one could in theory try to extract the scope
-         * from the config file or string passed, it would require putting some
-         * effort into parsing the config file or string.
-         * As a workaround, we just hardcode some typical solver scope names,
-         * with "default_sub_solver" being the default scope for the main solver
-         * assigned by AMGX when the user does not specify a scope and "main" being
-         * a common name for the main solver scope used in AMGX examples.
-        */
+        /* Note: Some parameters are scope-specific and depend on names defined 
+         * in the config. Since parsing the config for scope names is 
+         * non-trivial, we hardcode common ones: "main" (used in AMGX examples) 
+         * and "default_sub_solver" (default if none is specified).
+         */
         const std::vector<std::string> scopes = {
             "main", "default_sub_solver"
             };
@@ -160,12 +236,13 @@ AmgXGenLinSolver::AmgXGenLinSolver(
      * (no need to use AMGX_SAFE_CALL after this point) */
     AMGX_SAFE_CALL(AMGX_config_add_parameters(&_Config, "exception_handling=1"));
 
-    /* Create resources: single-GPU and single-threaded applications only.
-     * Note: Resource objects are not thread-safe. Therefore, we need to 
-     * make sure only one is created. See below for more details. 
+    /* Create resources (single-GPU, single-threaded only).
+     * AMGX resource objects are not thread-safe, so we ensure only one is created.
+     * References:
      * https://github.com/NVIDIA/AMGX/issues/109#issuecomment-674046246
-     * https://github.com/barbagroup/AmgXWrapper/blob/ab70b5e7bc1248875040814edef7474ad18349af/src/AmgXSolver.hpp#L335C12-L337C57 
+     * https://github.com/barbagroup/AmgXWrapper/blob/ab70b5e7bc1248875040814edef7474ad18349af/src/AmgXSolver.hpp#L335
      */
+
     if (_ActiveSolverInstances == 0) {
         AMGX_resources_create_simple(&_Resources, _Config);
     }

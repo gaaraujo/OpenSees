@@ -3547,9 +3547,17 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       opserr << "<-verbose verbose> ";
       opserr << "<-blockSize blockSize> ";
       opserr << "<-callback callback>" << endln;
+
+      opserr << "WARNING: Alternatively, use the default constructor: ";
+      opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
+      opserr << "<-smoother smoother> <-max_iters max_iters> ";
+      opserr << "<-abs_tolerance abs_tolerance> <-rel_tolerance rel_tolerance> ";
+      opserr << "<-monitor_residual monitor_residual> <-blockSize blockSize>" << endln;
+
       return TCL_ERROR;
     }
 
+    // Parameters for constructor with config file and options
     std::string configFileStr = ""; 
     std::string configOptionsStr = ""; 
     std::string modeStr = "dDDI";
@@ -3557,6 +3565,15 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     bool verbose = false;
     AMGX_print_callback callback = defaultAmgXCallback;
     int blockSize = 1;
+
+    // Parameters for constructor with default config
+    std::string solverStr = "PCG";
+    std::string preconditionerStr = "AMG";
+    std::string smootherStr = "JACOBI_L1";
+    int maxIters = 1000;
+    double absTolerance = 1e-12;
+    double relTolerance = 1e-6;
+    int monitorResidual = 1;
 
     int currentArg = 2;
     while (currentArg < argc) {
@@ -3611,9 +3628,49 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
             return TCL_ERROR;
           }
           currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-solver") == 0) {
+          solverStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-preconditioner") == 0) {
+          preconditionerStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-smoother") == 0) {
+          smootherStr = argv[currentArg+1];
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-maxIters") == 0) {
+          if (Tcl_GetInt(interp, argv[currentArg+1], &maxIters) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for maxIters. Expected integer\n";
+            return TCL_ERROR;
+          }
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-absTolerance") == 0) {
+          if (Tcl_GetDouble(interp, argv[currentArg+1], &absTolerance) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for absTolerance. Expected double\n";
+            return TCL_ERROR;
+          }
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-relTolerance") == 0) {
+          if (Tcl_GetDouble(interp, argv[currentArg+1], &relTolerance) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for relTolerance. Expected double\n";
+            return TCL_ERROR;
+          }
+          currentArg += 2;
+        } else if (strcmp(argv[currentArg],"-monitorResidual") == 0) {
+          if (Tcl_GetInt(interp, argv[currentArg+1], &monitorResidual) != TCL_OK) {
+            opserr << "WARNING: AmgXGenLinSolver: Invalid value for monitorResidual. Expected integer\n";
+            return TCL_ERROR;
+          }
+          currentArg += 2;
         } else {
           opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
-          opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -verbose, -blockSize, -callback" << endln;
+          opserr << "Valid options are: " << endln;
+          opserr << "Constructor with config file and options: ";
+          opserr << "-configFile, -configOptions, -mode, ";
+          opserr << "-usePinnedMemory, -verbose, -blockSize, -callback" << endln;
+          opserr << "Constructor with default config: ";
+          opserr << "-solver, -preconditioner, -smoother, -maxIters, ";
+          opserr << "-absTolerance, -relTolerance, -monitorResidual, ";
+          opserr << "-usePinnedMemory, -verbose, -blockSize" << endln;
           return TCL_ERROR;
         }
       } else {
@@ -3621,9 +3678,20 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       }
     }
 
-    AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
-        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
-    );
+    AmgXGenLinSolver *theSolver;
+    if (configFileStr.empty() && configOptionsStr.empty()) {
+      // Constructor with default config
+      theSolver = new AmgXGenLinSolver(
+          solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
+          maxIters, absTolerance, relTolerance, monitorResidual, 
+          modeStr.c_str(), usePinnedMemory, verbose
+      );
+    } else {
+      // Constructor with config file and options
+      theSolver = new AmgXGenLinSolver(
+          configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
+      );
+    }
     theSOE = new AmgXGenLinSOE(*theSolver, blockSize);
   }
 #endif

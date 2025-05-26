@@ -3696,6 +3696,8 @@ void* OPS_AmgXGenLinSolver()
            << "is compiled with AMGX support\n";
     return nullptr;
     #else
+
+    // Parameters for constructor with config file and options
     std::string configFileStr = ""; 
     std::string configOptionsStr = ""; 
     std::string modeStr = "dDDI";
@@ -3703,6 +3705,15 @@ void* OPS_AmgXGenLinSolver()
     bool verbose = false;
     AMGX_print_callback callback = defaultAmgXCallback;
     int blockSize = 1;
+    
+    // Parameters for constructor with default config
+    std::string solverStr = "PCG";
+    std::string preconditionerStr = "AMG";
+    std::string smootherStr = "JACOBI_L1";
+    int maxIters = 1000;
+    double absTolerance = 1e-12;
+    double relTolerance = 1e-6;
+    int monitorResidual = 1;
 
     // Check if any arguments are provided
     if (OPS_GetNumRemainingInputArgs() == 0) {
@@ -3712,9 +3723,18 @@ void* OPS_AmgXGenLinSolver()
         opserr << "Expected: system AmgX <-configFile configFile> ";
         opserr << "<-configOptions configOptions> <-mode mode> ";
         opserr << "<-usePinnedMemory usePinnedMemory> ";
-        opserr << "<-blockSize blockSize>";
-        opserr << "<-verbose verbose>";
+        opserr << "<-blockSize blockSize> ";
+        opserr << "<-verbose verbose> ";
         opserr << "<-callback callback>" << endln;
+        opserr << "WARNING: Alternatively, use the default constructor: ";
+        opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
+        opserr << "<-smoother smoother> <-max_iters max_iters> ";
+        opserr << "<-abs_tolerance abs_tolerance> <-rel_tolerance rel_tolerance> ";
+        opserr << "<-monitor_residual monitor_residual> ";
+        opserr << "<-mode mode> ";
+        opserr << "<-usePinnedMemory usePinnedMemory> ";
+        opserr << "<-blockSize blockSize> ";
+        opserr << "<-verbose verbose>" << endln;
         return nullptr;
     }
 
@@ -3794,9 +3814,61 @@ void* OPS_AmgXGenLinSolver()
                     opserr << "WARNING: AmgXGenLinSolver: Invalid callback" << endln;
                     return nullptr;
                 }
+            } else if(strcmp(nextString,"solver") == 0 || strcmp(nextString,"-solver") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for solver" << endln;
+                    return nullptr;
+                }
+                solverStr = nextString;
+            } else if(strcmp(nextString,"preconditioner") == 0 || strcmp(nextString,"-preconditioner") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for preconditioner" << endln;
+                    return nullptr;
+                }
+                preconditionerStr = nextString;
+            } else if(strcmp(nextString,"smoother") == 0 || strcmp(nextString,"-smoother") == 0) {
+                nextString = OPS_GetString();
+                if (nextString == nullptr) {
+                    opserr << "WARNING: AmgXGenLinSolver: Missing value for smoother" << endln;
+                    return nullptr;
+                }
+                smootherStr = nextString;
+            } else if(strcmp(nextString,"maxIters") == 0 || strcmp(nextString,"-maxIters") == 0) {
+                int numData = 1;
+                if(OPS_GetIntInput(&numData, &maxIters) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for maxIters. Expected integer\n";
+                    return nullptr;
+                }
+            } else if(strcmp(nextString,"absTolerance") == 0 || strcmp(nextString,"-absTolerance") == 0) {
+                int numData = 1;
+                if(OPS_GetDoubleInput(&numData, &absTolerance) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for absTolerance. Expected double\n";
+                    return nullptr;
+                }
+            } else if(strcmp(nextString,"relTolerance") == 0 || strcmp(nextString,"-relTolerance") == 0) {
+                int numData = 1;
+                if(OPS_GetDoubleInput(&numData, &relTolerance) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for relTolerance. Expected double\n";
+                    return nullptr;
+                }
+            } else if(strcmp(nextString,"monitorResidual") == 0 || strcmp(nextString,"-monitorResidual") == 0) {
+                int numData = 1;
+                if(OPS_GetIntInput(&numData, &monitorResidual) < 0) {
+                    opserr << "WARNING: AmgXGenLinSolver: Invalid value for monitorResidual. Expected integer\n";
+                    return nullptr;
+                }
             } else {
                 opserr << "WARNING: AmgXGenLinSolver: Unknown option " << nextString << endln;
-                opserr << "Valid options are: -configFile, -configOptions, -mode, -usePinnedMemory, -verbose, -blockSize" << endln;
+                opserr << "Valid options are: " << endln;
+                opserr << "Constructor with config file and options: ";
+                opserr << "-configFile, -configOptions, -mode, ";
+                opserr << "-usePinnedMemory, -verbose, -blockSize, -callback" << endln;
+                opserr << "Constructor with default config: ";
+                opserr << "-solver, -preconditioner, -smoother, -maxIters, ";
+                opserr << "-absTolerance, -relTolerance, -monitorResidual, ";
+                opserr << "-mode, -usePinnedMemory, -verbose, -blockSize" << endln;
                 return nullptr;
             }
         } else {
@@ -3805,9 +3877,20 @@ void* OPS_AmgXGenLinSolver()
         }
     }
 
-    AmgXGenLinSolver *theSolver = new AmgXGenLinSolver(
-        configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
-    );
+    AmgXGenLinSolver *theSolver;
+    if (configFileStr.empty() && configOptionsStr.empty()) {
+        // Constructor with default config
+        theSolver = new AmgXGenLinSolver(
+            solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
+            maxIters, absTolerance, relTolerance, monitorResidual, 
+            modeStr.c_str(), usePinnedMemory, verbose
+        );
+    } else {
+        // Constructor with config file and options
+        theSolver = new AmgXGenLinSolver(
+            configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
+        );
+    }
     return new AmgXGenLinSOE(*theSolver, blockSize);
     #endif
 }

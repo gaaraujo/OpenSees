@@ -47,7 +47,7 @@
 
 #include <LinearSOESolver.h>
 #include <OPS_Stream.h>
-
+#include <string>
 #include <amgx_c.h>
 
 #ifdef __cplusplus
@@ -64,21 +64,30 @@ class AmgXGenLinSOE;
 class AmgXGenLinSolver : public LinearSOESolver
 {
     public:
+        // Constructor with default config
+        AmgXGenLinSolver(const std::string solver = "PCG", const std::string preconditioner = "AMG", 
+            std::string smoother = "JACOBI_L1", int max_iters = 1000, double abs_tolerance = 1e-12, 
+            double rel_tolerance = 1e-6, int monitor_residual = 1, const std::string mode = "dDDI", 
+            bool usePinnedMemory = true, bool verbose = false);
+        // Constructor with config file and options
         AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr, 
             const char* mode = "dDDI", bool usePinnedMemory = true, bool verbose = false,
             AMGX_print_callback callback = defaultAmgXCallback);
+        // Destructor
         ~AmgXGenLinSolver();
-        
+
+        // Solver methods
         int solve();
         int setSize();
         int setLinearSOE(AmgXGenLinSOE &theSOE);
-
-        int sendSelf(int commitTag, Channel &theChannel);
-        int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
-
         int getNumIterations();
         double getResidualNorm();
 
+        // Parallel methods
+        int sendSelf(int commitTag, Channel &theChannel);
+        int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
+
+        // Track if the matrix in the AmgXGenLinSOE has changed
         using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
     protected:
 
@@ -86,6 +95,12 @@ class AmgXGenLinSolver : public LinearSOESolver
         AmgXGenLinSOE *theSOE;
         bool _usePinnedMemory;
         bool _verbose;
+
+        // AMGX initializer (to be used by constructors only)
+        void _init(const char *configFile = nullptr, 
+                   const char *configOptions = nullptr, 
+                   const char* mode = "dDDI",
+                   AMGX_print_callback callback = defaultAmgXCallback);
 
         // Static members for global state
         static bool _AmgXInitialized;           ///< Whether AMGX is initialized
