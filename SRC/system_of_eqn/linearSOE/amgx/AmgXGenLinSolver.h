@@ -93,8 +93,8 @@ class AmgXGenLinSolver : public LinearSOESolver
 
     private:
         AmgXGenLinSOE *theSOE;
-        bool _usePinnedMemory;
-        bool _verbose;
+        bool m_usePinnedMemory;
+        bool m_verbose;
 
         // AMGX initializer (to be used by constructors only)
         void _init(const char *configFile = nullptr, 
@@ -103,17 +103,17 @@ class AmgXGenLinSolver : public LinearSOESolver
                    AMGX_print_callback callback = defaultAmgXCallback);
 
         // Static members for global state
-        static bool _AmgXInitialized;           ///< Whether AMGX is initialized
-        static int _ActiveSolverInstances;     ///< Count of active solver instances
-        static AMGX_resources_handle _Resources;  ///< Resources handle
+        static bool m_AmgXInitialized;           ///< Whether AMGX is initialized
+        static int m_ActiveSolverInstances;     ///< Count of active solver instances
+        static AMGX_resources_handle m_Resources;  ///< Resources handle
         
         // AMGX handles
-        AMGX_config_handle    _Config       = nullptr;  ///< Configuration handle
-        AMGX_matrix_handle    _Matrix       = nullptr;  ///< Matrix handle
-        AMGX_vector_handle    _RHS          = nullptr;  ///< Right-hand side vector handle
-        AMGX_vector_handle    _Solution     = nullptr;  ///< Solution vector handle
-        AMGX_solver_handle    _Solver       = nullptr;  ///< Solver handle
-        AMGX_Mode             _Mode;                    ///< Solver mode
+        AMGX_config_handle    m_Config       = nullptr;  ///< Configuration handle
+        AMGX_matrix_handle    m_Matrix       = nullptr;  ///< Matrix handle
+        AMGX_vector_handle    m_RHS          = nullptr;  ///< Right-hand side vector handle
+        AMGX_vector_handle    m_Solution     = nullptr;  ///< Solution vector handle
+        AMGX_solver_handle    m_Solver       = nullptr;  ///< Solver handle
+        AMGX_Mode             m_Mode;                    ///< Solver mode
 };
 
 #endif

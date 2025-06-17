@@ -3565,11 +3565,12 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     bool verbose = false;
     AMGX_print_callback callback = defaultAmgXCallback;
     int blockSize = 1;
+    bool paddingEnabled = true;
 
     // Parameters for constructor with default config
     std::string solverStr = "PCG";
     std::string preconditionerStr = "AMG";
-    std::string smootherStr = "JACOBI_L1";
+    std::string smootherStr = "BLOCK_JACOBI";
     int maxIters = 1000;
     double absTolerance = 1e-12;
     double relTolerance = 1e-6;
@@ -3678,6 +3679,17 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       }
     }
 
+    // Force specific block size for JACOBI_L1
+    if ((preconditionerStr == "JACOBI_L1" || smootherStr == "JACOBI_L1") && blockSize == 0) {
+      if (blockSize == 0) {
+        blockSize = 1;
+      } else {
+        opserr << "WARNING: AmgXGenLinSolver: JACOBI_L1 smoother/preconditioner only supports blockSize = 1. ";
+        opserr << "Try using -blockSize 1 or changing -smoother or -preconditioner to BLOCK_JACOBI instead." << endln;
+        return TCL_ERROR;
+      }
+    }
+
     AmgXGenLinSolver *theSolver;
     if (configFileStr.empty() && configOptionsStr.empty()) {
       // Constructor with default config
@@ -3692,7 +3704,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
           configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
       );
     }
-    theSOE = new AmgXGenLinSOE(*theSolver, blockSize);
+    theSOE = new AmgXGenLinSOE(*theSolver, blockSize, paddingEnabled, verbose);
   }
 #endif
 

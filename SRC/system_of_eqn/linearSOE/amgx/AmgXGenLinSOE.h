@@ -41,7 +41,9 @@ class AmgXGenLinSolver;
 class AmgXGenLinSOE : public LinearSOE
 {
     public:
-        AmgXGenLinSOE(AmgXGenLinSolver &theSolver, int blockSize);
+        AmgXGenLinSOE(AmgXGenLinSolver &theSolver, 
+                      int blockSize = 1, bool paddingEnabled = true,
+                      bool verbose = false);
         AmgXGenLinSOE();
 
         ~AmgXGenLinSOE();
@@ -62,6 +64,7 @@ class AmgXGenLinSOE : public LinearSOE
         void setX(int loc, double value);
         void setX(const Vector &x);
         int setAmgXGenLinSolver(AmgXGenLinSolver &newSolver);   
+        int solve(void);
         
         int sendSelf(int commitTag, Channel &theChannel);   
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);  
@@ -79,16 +82,23 @@ class AmgXGenLinSOE : public LinearSOE
 
     private:    
         // Track the status of the matrix
-        AmgXMatrixStatus _matrixStatus;
+        AmgXMatrixStatus m_matrixStatus;
 
         // RHS and solution vectors
-        Vector _X, _B;
+        Vector m_X, m_B; // for interfacing with OpenSees
+        std::vector<double> m_XPadded, m_BPadded; // for internal use
 
         // Block CSR format for sparse matrix A
-        std::vector<int> _ARowPtrBlock, _AColIdxBlock;
-        std::vector<double> _AValuesBlock;
-        int _BlockSize;
-        
+        std::vector<int> m_ARowPtrBlock, m_AColIdxBlock;
+        std::vector<double> m_AValuesBlock;
+        int m_BlockSize;
+
+        // Whether to pad the matrix with zeros to make it a multiple of the block size
+        bool m_paddingEnabled;
+
+        // Whether to print verbose output
+        bool m_verbose;
+
         // Block CSR format conversion
         int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = 0.7);
         int countBlocks(Graph &theGraph, int block_size);
