@@ -87,8 +87,6 @@ class AmgXGenLinSolver : public LinearSOESolver
         int sendSelf(int commitTag, Channel &theChannel);
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
 
-        // Track if the matrix in the AmgXGenLinSOE has changed
-        using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
     protected:
 
     private:

@@ -520,6 +520,12 @@ if(NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
   target_link_libraries(OPS_InterpTcl PRIVATE ${TCL_LIBRARIES})
 endif()
 
+# Add AMGX support to the Tcl and generic interpreter modules
+if(CUDAToolkit_FOUND)
+  target_compile_definitions(OPS_INTERPRETER PUBLIC ${AMGX_FLAG})
+  target_compile_definitions(OPS_InterpTcl PUBLIC ${AMGX_FLAG})
+endif()
+
 #
 # OpenSees G3 Library - a slimmed down OpenSees
 #

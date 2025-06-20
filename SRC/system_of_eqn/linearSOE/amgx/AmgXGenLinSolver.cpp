@@ -39,6 +39,9 @@
 #include <sstream>
 #include <iomanip>
 
+// Track if the matrix in the AmgXGenLinSOE has changed
+using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
+
 // Static member initialization
 bool AmgXGenLinSolver::m_AmgXInitialized = false;
 int AmgXGenLinSolver::m_ActiveSolverInstances = 0;
