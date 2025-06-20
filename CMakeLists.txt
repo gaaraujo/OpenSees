@@ -387,8 +387,6 @@ else()
 endif()
 
 if(CUDAToolkit_FOUND)
-# TODO: Check this tomorrow
-# https://github.com/NVIDIA/AMGX/blob/666311a52c36d75f6738ecc15897840256d2cf79/examples/CMakeLists.txt
   message(STATUS "CUDAToolkit_FOUND: ${CUDAToolkit_FOUND}")
   message(STATUS "CUDAToolkit_INCLUDE_DIRS: ${CUDAToolkit_INCLUDE_DIRS}")
   message(STATUS "CUDAToolkit_VERSION: ${CUDAToolkit_VERSION}")
