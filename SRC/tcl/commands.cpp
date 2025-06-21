@@ -3539,8 +3539,14 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   else if (strcmp(argv[1],"AmgX") == 0 || strcmp(argv[1],"Amgx") == 0 
            || strcmp(argv[1],"AMGX") == 0 || strcmp(argv[1],"amgx") == 0) {
     
-    if (argc % 2 != 0) {
+    if (argc % 2 != 0 && strlen(argv[2]) != 0) {
       opserr << "WARNING: Incorrect number of arguments for AmgXGenLinSolver. ";
+      opserr << "User provided system AmgX ";
+      opserr << "with the following arguments: " << endln;
+      for (int i = 2; i < argc; i++) {
+        opserr << argv[i] << " ";
+      }
+      opserr << endln;
       opserr << "Expected: system AmgX <-configFile configFile> ";
       opserr << "<-configOptions configOptions> <-mode mode> ";
       opserr << "<-usePinnedMemory usePinnedMemory> ";
@@ -3550,9 +3556,9 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 
       opserr << "WARNING: Alternatively, use the default constructor: ";
       opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
-      opserr << "<-smoother smoother> <-max_iters max_iters> ";
-      opserr << "<-abs_tolerance abs_tolerance> <-rel_tolerance rel_tolerance> ";
-      opserr << "<-monitor_residual monitor_residual> <-blockSize blockSize>" << endln;
+      opserr << "<-smoother smoother> <-maxIters max_iters> ";
+      opserr << "<-absTolerance abs_tolerance> <-relTolerance rel_tolerance> ";
+      opserr << "<-monitorResidual monitor_residual> <-blockSize blockSize>" << endln;
 
       return TCL_ERROR;
     }
@@ -3662,6 +3668,8 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
             return TCL_ERROR;
           }
           currentArg += 2;
+        } else if (strlen(argv[currentArg]) == 0) {
+          currentArg++;
         } else {
           opserr << "WARNING: AmgXGenLinSolver: Unknown option " << argv[currentArg] << endln;
           opserr << "Valid options are: " << endln;

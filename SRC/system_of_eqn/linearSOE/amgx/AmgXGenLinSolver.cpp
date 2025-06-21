@@ -77,12 +77,12 @@ namespace {
         } else {
             opserr << "AmgXGenLinSolver: Final to initial residual norm ratio = NaN" << endln;
         }
-        opserr << "NOTE: If the AMGX final absolute or residual norms reported here \n";
-        opserr << "are smaller than your specified tolerances and the solver still failed to converge, \n";
-        opserr << "it is likely that you may have specified use_scalar_norm=0 in the AMGX solver config options. \n";
-        opserr << "This results in the AMGX solver using a component-wise L2 norm instead of a scalar L2 norm. \n";
-        opserr << "To fix this, pass the config option use_scalar_norm=1 to your solver config options. \n";
-        opserr << "For more information, see the AMGX documentation." << endln;
+        // opserr << "NOTE: If the AMGX final absolute or residual norms reported here \n";
+        // opserr << "are smaller than your specified tolerances and the solver still failed to converge, \n";
+        // opserr << "it is likely that you may have specified use_scalar_norm=0 in the AMGX solver config options. \n";
+        // opserr << "This results in the AMGX solver using a component-wise L2 norm instead of a scalar L2 norm. \n";
+        // opserr << "To fix this, pass the config option use_scalar_norm=1 to your solver config options. \n";
+        // opserr << "For more information, see the AMGX documentation." << endln;
     }
 
     std::string getDefaultConfigOptions(std::string solver = "PCG", 
