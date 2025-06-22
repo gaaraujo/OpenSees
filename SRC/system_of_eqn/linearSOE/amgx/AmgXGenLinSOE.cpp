@@ -539,9 +539,8 @@ int AmgXGenLinSOE::solve(void)
         for (int localRow = 0; localRow < startRow; ++localRow) {
             const int idx = blockOffset + localRow * m_BlockSize + localRow;
             const double diag = m_AValuesBlock[idx];
-            avgDiag += diag;
-
             const double absDiag = (diag >= 0.0) ? diag : -diag;
+            avgDiag += absDiag;
             if (absDiag > maxAbsDiag) maxAbsDiag = absDiag;
         }
 
