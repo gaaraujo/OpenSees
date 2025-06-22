@@ -235,8 +235,8 @@ void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions,
             std::string params = 
                 "config_version=2," +
                 scope + ":obtain_timings=1," +
-                scope + ":print_solve_stats=1," +
-                scope + ":print_grid_stats=1," +
+                //scope + ":print_solve_stats=1," +
+                //scope + ":print_grid_stats=1," +
                 scope + ":print_config=1";
             AMGX_SAFE_CALL(AMGX_config_add_parameters(&m_Config, params.c_str()));
         }
