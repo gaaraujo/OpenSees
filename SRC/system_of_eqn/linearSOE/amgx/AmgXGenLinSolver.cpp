@@ -387,6 +387,12 @@ int AmgXGenLinSolver::solve() {
         case MatrixStatus::UNCHANGED: /* Matrix is the same as the previous solve */
             /* Do nothing */
             break;
+        default:
+            opserr << "WARNING: AmgXGenLinSolver: Invalid matrix status (" << theSOE->m_matrixStatus << ").\n";
+            opserr << "Only " << MatrixStatus::STRUCTURE_CHANGED << ", ";
+            opserr << MatrixStatus::COEFFICIENTS_CHANGED << ", ";
+            opserr << MatrixStatus::UNCHANGED << " are supported -- AmgXGenLinSolver::solve" << endln;
+            return -1;
     }
 
     /* Upload the RHS vector to the GPU*/
