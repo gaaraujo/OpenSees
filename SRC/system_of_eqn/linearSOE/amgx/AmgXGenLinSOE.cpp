@@ -583,6 +583,7 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     const int nnz = m_AValuesBlock.size();
 
     // Assume the header is already written to output stream
+    output << "%% Block size: " << m_BlockSize << "\n";
     output << size << " " << size << " " << nnz << "\n";
 
     // Write the sparse matrix entries
