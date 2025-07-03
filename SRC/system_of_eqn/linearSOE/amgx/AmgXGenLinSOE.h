@@ -65,7 +65,8 @@ class AmgXGenLinSOE : public LinearSOE
         void setX(const Vector &x);
         int setAmgXGenLinSolver(AmgXGenLinSolver &newSolver);   
         int solve(void);
-        
+        int saveSparseA(OPS_Stream& output, int baseIndex = 0);
+
         int sendSelf(int commitTag, Channel &theChannel);   
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);  
 

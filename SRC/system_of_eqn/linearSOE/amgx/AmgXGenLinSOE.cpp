@@ -571,6 +571,48 @@ int AmgXGenLinSOE::solve(void)
     }
 }
 
+int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
+{
+    if (m_AValuesBlock.empty() || m_ARowPtrBlock.empty() || m_AColIdxBlock.empty()) {
+        opserr << "WARNING: AmgXGenLinSOE::saveSparseA() - m_AValuesBlock, m_ARowPtrBlock, or m_AColIdxBlock is empty\n";
+        return 0;
+    }
+
+    const int numBlockRows = m_ARowPtrBlock.size() - 1;
+    const int size = numBlockRows * m_BlockSize;
+    const int nnz = m_AValuesBlock.size();
+
+    // Assume the header is already written to output stream
+    output << size << " " << size << " " << nnz << "\n";
+
+    // Write the sparse matrix entries
+    int nnz_written = 0;
+    for (int blockRow = 0; blockRow < numBlockRows; blockRow++) {
+        int rowStart = m_ARowPtrBlock[blockRow];
+        int rowEnd = m_ARowPtrBlock[blockRow + 1];
+        for (int blockIdx = rowStart; blockIdx < rowEnd; blockIdx++) {
+            int blockCol = m_AColIdxBlock[blockIdx];
+            double* theBlock = m_AValuesBlock.data() + blockIdx * m_BlockSize * m_BlockSize;
+            for (int i = 0; i < m_BlockSize; i++) {
+                for (int j = 0; j < m_BlockSize; j++) {
+                    const int row = blockRow * m_BlockSize + i + baseIndex;
+                    const int col = blockCol * m_BlockSize + j + baseIndex;
+                    const double val = theBlock[i * m_BlockSize + j];
+                    output << row << " " << col << " " << val << "\n";
+                    nnz_written++;
+                }
+            }
+        }
+    }
+
+    if (nnz_written != nnz) {
+        opserr << "WARNING: AmgXGenLinSOE::saveSparseA() - nnz_written != nnz\n";
+        return -1;
+    }
+
+    return 0;
+}
+
 int AmgXGenLinSOE::sendSelf(int commitTag, Channel &theChannel)
 {
     return 0;
