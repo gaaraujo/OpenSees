@@ -513,6 +513,51 @@ int AmgXGenLinSOE::setAmgXGenLinSolver(AmgXGenLinSolver &newSolver)
     return this->LinearSOE::setSolver(newSolver);
 }
 
+// Fill padded diagonals with a user-supplied value plus an automatically computed value
+// Note: existing values in the padded diagonals are overwritten
+int AmgXGenLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
+    if (m_BlockSize == 1 || m_X.Size() == m_XPadded.size()) {
+        return 0;
+    }
+
+    const int blockOffset = static_cast<int>(m_AValuesBlock.size()) - m_BlockSize * m_BlockSize;
+    const int startRow = m_X.Size() % m_BlockSize;
+
+    if (startRow <= 0 || blockOffset < 0) {
+        opserr << "WARNING: AmgXGenLinSOE::fillPaddedDiagonals() - invalid block offset or start row\n";
+        return -1;
+    }
+
+    double repDiagValue = value;
+
+    if (autoCompute) {
+        double avgDiag = 0.0;
+        double maxAbsDiag = 0.0;
+
+        for (int localRow = 0; localRow < startRow; ++localRow) {
+            const int idx = blockOffset + localRow * m_BlockSize + localRow;
+            const double diag = m_AValuesBlock[idx];
+            const double absDiag = (diag >= 0.0) ? diag : -diag;
+            avgDiag += absDiag;
+            if (absDiag > maxAbsDiag) maxAbsDiag = absDiag;
+        }
+
+        avgDiag /= static_cast<double>(startRow);
+        const double minDiag = 1e-3 * maxAbsDiag;
+        // Add the average diagonal value to the user-supplied value
+        repDiagValue += (avgDiag > minDiag) ? avgDiag : minDiag;
+    }
+
+    for (int localRow = startRow; localRow < m_BlockSize; ++localRow) {
+        const int idx = blockOffset + localRow * m_BlockSize + localRow;
+        m_AValuesBlock[idx] = repDiagValue;
+    }
+
+    return 0;
+}
+
+
+
 int AmgXGenLinSOE::solve(void)
 {
     // Some basic matrix info
@@ -528,34 +573,8 @@ int AmgXGenLinSOE::solve(void)
     // NOTE: We estimate a representative stiffness value. 
     // Alternatively, we could just fill out with ones in the diagonal, 
     // but that may cause numerical problems.
-    if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled && originalSize < size) {
-        const int blockOffset = m_AValuesBlock.size() - m_BlockSize * m_BlockSize;
-        const int startRow = originalSize % m_BlockSize;
-
-        double avgDiag = 0.0;
-        double maxAbsDiag = 0.0;
-
-        // Loop: compute sum and max(abs(diag))
-        for (int localRow = 0; localRow < startRow; ++localRow) {
-            const int idx = blockOffset + localRow * m_BlockSize + localRow;
-            const double diag = m_AValuesBlock[idx];
-            const double absDiag = (diag >= 0.0) ? diag : -diag;
-            avgDiag += absDiag;
-            if (absDiag > maxAbsDiag) maxAbsDiag = absDiag;
-        }
-
-        if (startRow > 0) {
-            // Compute representative diagonal value
-            avgDiag /= static_cast<double>(startRow);
-            const double minDiag = 1e-3 * maxAbsDiag;
-            double repDiagValue = (avgDiag > minDiag) ? avgDiag : minDiag;
-
-            // Loop to set padded rows
-            for (int localRow = startRow; localRow < m_BlockSize; ++localRow) {
-                const int idx = blockOffset + localRow * m_BlockSize + localRow;
-                m_AValuesBlock[idx] = repDiagValue;
-            }
-        }
+    if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
+        fillPaddedDiagonals();
     }
 
     LinearSOESolver *the_Solver = this->getSolver();
@@ -576,6 +595,11 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     if (m_AValuesBlock.empty() || m_ARowPtrBlock.empty() || m_AColIdxBlock.empty()) {
         opserr << "WARNING: AmgXGenLinSOE::saveSparseA() - m_AValuesBlock, m_ARowPtrBlock, or m_AColIdxBlock is empty\n";
         return 0;
+    }
+
+    // Pad matrix before printing
+    if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
+        fillPaddedDiagonals();
     }
 
     const int numBlockRows = m_ARowPtrBlock.size() - 1;

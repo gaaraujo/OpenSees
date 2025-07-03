@@ -103,7 +103,7 @@ class AmgXGenLinSOE : public LinearSOE
         // Block CSR format conversion
         int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = 0.7);
         int countBlocks(Graph &theGraph, int block_size);
-
+        int fillPaddedDiagonals(double value = 0.0, bool autoCompute = true);
 };
 
 #endif
