@@ -114,11 +114,11 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
         return -1;
     }
 
-    if (m_BlockSize != 1 && m_BlockSize != 4) {
-        opserr << "WARNING: AmgXGenLinSOE::setSize : Most AmgX solvers only support block size 1 or 4. \n";
-        opserr << "- Watch out for any AMGX errors in the output. \n";
-        opserr << "- If you get errors related to the blockSize, try passing -blockSize 1 or -blockSize 4 to system AmgX. \n";
-    }
+    // if (m_BlockSize != 1 && m_BlockSize != 4) {
+    //     opserr << "WARNING: AmgXGenLinSOE::setSize : Most AmgX solvers only support block size 1 or 4. \n";
+    //     opserr << "- Watch out for any AMGX errors in the output. \n";
+    //     opserr << "- If you get errors related to the blockSize, try passing -blockSize 1 or -blockSize 4 to system AmgX. \n";
+    // }
     
     if (size % m_BlockSize != 0 && m_paddingEnabled == false) {
         opserr << "WARNING: the number of equations (" << size << ") is not divisible by the block size (" << m_BlockSize << "). \n";

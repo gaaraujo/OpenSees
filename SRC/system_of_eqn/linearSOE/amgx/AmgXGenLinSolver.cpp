@@ -53,7 +53,7 @@ extern "C" {
 #endif
 void defaultAmgXCallback(const char* msg, int length) {
     if (msg && length > 0) {
-        opserr.write(msg, length);
+        opserr << msg;
         opserr << endln;
     }
 }
