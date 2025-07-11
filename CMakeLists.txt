@@ -524,6 +524,8 @@ endif()
 if(CUDAToolkit_FOUND)
   target_compile_definitions(OPS_INTERPRETER PUBLIC ${AMGX_FLAG})
   target_compile_definitions(OPS_InterpTcl PUBLIC ${AMGX_FLAG})
+  target_include_directories(OPS_INTERPRETER PUBLIC ${AMGX_INCLUDE_DIR})
+  target_include_directories(OPS_InterpTcl PUBLIC ${AMGX_INCLUDE_DIR})
 endif()
 
 #
