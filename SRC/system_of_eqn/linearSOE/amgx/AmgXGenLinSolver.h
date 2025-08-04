@@ -53,8 +53,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void defaultAmgXCallback(const char* msg, int length);
-void noAmgXCallback(const char* msg, int length);
+void AmgXCallback(const char* msg, int length);
 #ifdef __cplusplus
 }
 #endif
@@ -72,7 +71,7 @@ class AmgXGenLinSolver : public LinearSOESolver
         // Constructor with config file and options
         AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr, 
             const char* mode = "dDDI", bool usePinnedMemory = true, bool verbose = false,
-            AMGX_print_callback callback = defaultAmgXCallback);
+            OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
         // Destructor
         ~AmgXGenLinSolver();
 
@@ -82,7 +81,11 @@ class AmgXGenLinSolver : public LinearSOESolver
         int setLinearSOE(AmgXGenLinSOE &theSOE);
         int getNumIterations();
         double getResidualNorm();
-
+        
+        // Output stream
+        static void setCallbackStream(OPS_Stream* output) { m_CallbackStream = output; }
+        static OPS_Stream* getCallbackStream() { return m_CallbackStream; }
+        
         // Parallel methods
         int sendSelf(int commitTag, Channel &theChannel);
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
@@ -98,13 +101,14 @@ class AmgXGenLinSolver : public LinearSOESolver
         void _init(const char *configFile = nullptr, 
                    const char *configOptions = nullptr, 
                    const char* mode = "dDDI",
-                   AMGX_print_callback callback = defaultAmgXCallback);
+                   OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
         // Static members for global state
         static bool m_AmgXInitialized;           ///< Whether AMGX is initialized
         static int m_ActiveSolverInstances;     ///< Count of active solver instances
         static AMGX_resources_handle m_Resources;  ///< Resources handle
-        
+        static OPS_Stream* m_CallbackStream;         ///< Callback stream
+
         // AMGX handles
         AMGX_config_handle    m_Config       = nullptr;  ///< Configuration handle
         AMGX_matrix_handle    m_Matrix       = nullptr;  ///< Matrix handle

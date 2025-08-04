@@ -3703,7 +3703,8 @@ void* OPS_AmgXGenLinSolver()
     std::string modeStr = "dDDI";
     bool usePinnedMemory = true;
     bool verbose = false;
-    AMGX_print_callback callback = defaultAmgXCallback;
+    OPS_Stream* callbackStream = (OPS_Stream*)&opserr;
+    FileStream callbackFile;
     int blockSize = 1;
     bool paddingEnabled = true;
 
@@ -3726,7 +3727,7 @@ void* OPS_AmgXGenLinSolver()
         opserr << "<-usePinnedMemory usePinnedMemory> ";
         opserr << "<-blockSize blockSize> ";
         opserr << "<-verbose verbose> ";
-        opserr << "<-callback callback>" << endln;
+        opserr << "<-callback callbackStream|callbackFile>" << endln;
         opserr << "WARNING: Alternatively, use the default constructor: ";
         opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
         opserr << "<-smoother smoother> <-max_iters max_iters> ";
@@ -3807,13 +3808,17 @@ void* OPS_AmgXGenLinSolver()
                     opserr << "WARNING: AmgXGenLinSolver: Missing value for callback" << endln;
                     return nullptr;
                 }
-                if (strcmp(nextString,"default") == 0) {
-                    callback = defaultAmgXCallback;
-                } else if (strcmp(nextString,"none") == 0) {
-                    callback = noAmgXCallback;
+                if (strcmp(nextString,"default") == 0 || strcmp(nextString,"opserr") == 0) {
+                    callbackStream = (OPS_Stream*)&opserr;
+                } else if (strcmp(nextString,"none") == 0 || strcmp(nextString,"null") == 0) {
+                    callbackStream = nullptr;
                 } else {
-                    opserr << "WARNING: AmgXGenLinSolver: Invalid callback" << endln;
-                    return nullptr;
+                    // Assume it is a file name
+                    if (callbackFile.setFile(nextString) != 0) {
+                        opserr << "WARNING: AmgXGenLinSolver: Failed to open callback file: " << nextString << endln;
+                        return nullptr;
+                    }
+                    callbackStream = &callbackFile;
                 }
             } else if(strcmp(nextString,"solver") == 0 || strcmp(nextString,"-solver") == 0) {
                 nextString = OPS_GetString();
@@ -3900,7 +3905,7 @@ void* OPS_AmgXGenLinSolver()
     } else {
         // Constructor with config file and options
         theSolver = new AmgXGenLinSolver(
-            configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
+            configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callbackStream
         );
     }
     return new AmgXGenLinSOE(*theSolver, blockSize, paddingEnabled, verbose);

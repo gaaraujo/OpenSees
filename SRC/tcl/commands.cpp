@@ -3552,7 +3552,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       opserr << "<-usePinnedMemory usePinnedMemory> ";
       opserr << "<-verbose verbose> ";
       opserr << "<-blockSize blockSize> ";
-      opserr << "<-callback callback>" << endln;
+      opserr << "<-callback callbackStream|callbackFile>" << endln;
 
       opserr << "WARNING: Alternatively, use the default constructor: ";
       opserr << "system AmgX <-solver solver> <-preconditioner preconditioner> ";
@@ -3569,7 +3569,8 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     std::string modeStr = "dDDI";
     bool usePinnedMemory = true;
     bool verbose = false;
-    AMGX_print_callback callback = defaultAmgXCallback;
+    OPS_Stream* callbackStream = (OPS_Stream*)&opserr;
+    FileStream callbackFile;
     int blockSize = 1;
     bool paddingEnabled = true;
 
@@ -3626,13 +3627,17 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
           }
           currentArg += 2;
         } else if (strcmp(argv[currentArg],"-callback") == 0) {
-          if (strcmp(argv[currentArg+1],"default") == 0) {
-            callback = defaultAmgXCallback;
-          } else if (strcmp(argv[currentArg+1],"none") == 0) {
-            callback = noAmgXCallback;
+          if (strcmp(argv[currentArg+1],"default") == 0 || strcmp(argv[currentArg+1],"opserr") == 0) {
+            callbackStream = (OPS_Stream*)&opserr;
+          } else if (strcmp(argv[currentArg+1],"none") == 0 || strcmp(argv[currentArg+1],"null") == 0) {
+            callbackStream = nullptr;
           } else {
-            opserr << "WARNING: AmgXGenLinSolver: Unknown callback " << argv[currentArg+1] << endln;
-            return TCL_ERROR;
+            // Assume it is a file name
+            if (callbackFile.setFile(argv[currentArg+1]) != 0) {
+              opserr << "WARNING: AmgXGenLinSolver: Failed to open callback file: " << argv[currentArg+1] << endln;
+              return TCL_ERROR;
+            }
+            callbackStream = &callbackFile;
           }
           currentArg += 2;
         } else if (strcmp(argv[currentArg],"-solver") == 0) {
@@ -3709,7 +3714,7 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
     } else {
       // Constructor with config file and options
       theSolver = new AmgXGenLinSolver(
-          configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callback
+          configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callbackStream
       );
     }
     theSOE = new AmgXGenLinSOE(*theSolver, blockSize, paddingEnabled, verbose);

@@ -46,20 +46,20 @@ using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
 bool AmgXGenLinSolver::m_AmgXInitialized = false;
 int AmgXGenLinSolver::m_ActiveSolverInstances = 0;
 AMGX_resources_handle AmgXGenLinSolver::m_Resources = nullptr;
+OPS_Stream* AmgXGenLinSolver::m_CallbackStream = (OPS_Stream*)&opserr;
 
 /* AMGX callbacks */
 #ifdef __cplusplus
 extern "C" {
 #endif
-void defaultAmgXCallback(const char* msg, int length) {
+void AmgXCallback(const char* msg, int length) {
     if (msg && length > 0) {
-        opserr << msg;
-        opserr << endln;
+        OPS_Stream* callbackStream = AmgXGenLinSolver::getCallbackStream();
+        if (callbackStream) {
+            *callbackStream << msg;
+            *callbackStream << endln;
+        }
     }
-}
-
-void noAmgXCallback(const char* msg, int length) {
-    // Do nothing
 }
 
 #ifdef __cplusplus
@@ -190,15 +190,15 @@ AmgXGenLinSolver::AmgXGenLinSolver(
 AmgXGenLinSolver::AmgXGenLinSolver( 
     const char *configFile, const char *configOptions, 
     const char* mode, bool usePinnedMemory, bool verbose,
-    AMGX_print_callback callback)
+    OPS_Stream* callbackStream)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
     m_usePinnedMemory(usePinnedMemory), m_verbose(verbose)
 {
-    _init(configFile, configOptions, mode, callback);
+    _init(configFile, configOptions, mode, callbackStream);
 }
 
 void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions, 
-                        const char* mode, AMGX_print_callback callback) 
+                        const char* mode, OPS_Stream* callbackStream) 
 {
     /* Initialize AMGX library - only done once across all instances */
     if (!m_AmgXInitialized) {
@@ -206,7 +206,8 @@ void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions,
         AMGX_SAFE_CALL(AMGX_install_signal_handler());
         m_AmgXInitialized = true;
     }
-    AMGX_SAFE_CALL(AMGX_register_print_callback(callback));
+    AmgXGenLinSolver::setCallbackStream(callbackStream);
+    AMGX_SAFE_CALL(AMGX_register_print_callback(AmgXCallback));
 
     if (configFile != nullptr && strlen(configFile) > 0 && configOptions != nullptr && strlen(configOptions) > 0) {
         AMGX_SAFE_CALL(AMGX_config_create_from_file_and_string(&m_Config, configFile, configOptions));
