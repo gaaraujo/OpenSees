@@ -32,16 +32,15 @@
 #define AmgXGenLinSOE_h
 
 #include <LinearSOE.h>
+#include <LinearSOESolver.h>
 #include <Vector.h>
 #include <vector> // for std::vector
 #include <OPS_Stream.h>  // needed for opserr
 
-class AmgXGenLinSolver;
-
 class AmgXGenLinSOE : public LinearSOE
 {
     public:
-        AmgXGenLinSOE(AmgXGenLinSolver &theSolver, 
+        AmgXGenLinSOE(LinearSOESolver &theSolver, 
                       int blockSize = 1, bool paddingEnabled = true,
                       bool verbose = false);
         AmgXGenLinSOE();
@@ -63,7 +62,7 @@ class AmgXGenLinSOE : public LinearSOE
 
         void setX(int loc, double value);
         void setX(const Vector &x);
-        int setAmgXGenLinSolver(AmgXGenLinSolver &newSolver);   
+        int setAmgXGenLinSolver(LinearSOESolver &newSolver);   
         int solve(void);
         int saveSparseA(OPS_Stream& output, int baseIndex = 0);
 
@@ -77,6 +76,7 @@ class AmgXGenLinSOE : public LinearSOE
             STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
         };
 
+        template<typename DataType>
         friend class AmgXGenLinSolver;
 
     protected:

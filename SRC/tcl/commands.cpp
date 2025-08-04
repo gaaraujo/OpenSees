@@ -361,6 +361,10 @@ extern void OPS_SetReliabilityDomain(ReliabilityDomain *);
 #ifdef _AMGX
 #include <AmgXGenLinSOE.h>
 #include <AmgXGenLinSolver.h>
+
+// Typedefs for the templated AmgXGenLinSolver classes
+typedef AmgXGenLinSolver<double> AmgXGenLinSolverDouble;
+typedef AmgXGenLinSolver<float> AmgXGenLinSolverFloat;
 #endif
 
 #include <SparseGenRowLinSOE.h>
@@ -3593,9 +3597,9 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
           configOptionsStr = argv[currentArg+1];
           currentArg += 2;
         } else if (strcmp(argv[currentArg],"-mode") == 0) {
-          if (strcmp(argv[currentArg+1],"dDDI") != 0) {
+          if (strcmp(argv[currentArg+1],"dDDI") != 0 && strcmp(argv[currentArg+1],"dFFI") != 0) {
             opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" 
-                   << argv[currentArg+1] << "). Only dDDI is supported.\n";
+                   << argv[currentArg+1] << "). Only dDDI and dFFI are supported.\n";
             return TCL_ERROR;
           }
           modeStr = argv[currentArg+1];
@@ -3703,19 +3707,33 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       }
     }
 
-    AmgXGenLinSolver *theSolver;
+    LinearSOESolver *theSolver;
     if (configFileStr.empty() && configOptionsStr.empty()) {
       // Constructor with default config
-      theSolver = new AmgXGenLinSolver(
-          solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
-          maxIters, absTolerance, relTolerance, monitorResidual, 
-          modeStr.c_str(), usePinnedMemory, verbose
-      );
+      if (modeStr == "dDDI") {
+        theSolver = new AmgXGenLinSolverDouble(
+            solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
+            maxIters, absTolerance, relTolerance, monitorResidual, 
+            usePinnedMemory, verbose
+        );
+      } else {
+        theSolver = new AmgXGenLinSolverFloat(
+            solverStr.c_str(), preconditionerStr.c_str(), smootherStr.c_str(), 
+            maxIters, absTolerance, relTolerance, monitorResidual, 
+            usePinnedMemory, verbose
+        );
+      }
     } else {
       // Constructor with config file and options
-      theSolver = new AmgXGenLinSolver(
-          configFileStr.c_str(), configOptionsStr.c_str(), modeStr.c_str(), usePinnedMemory, verbose, callbackStream
-      );
+      if (modeStr == "dDDI") {
+        theSolver = new AmgXGenLinSolverDouble(
+            configFileStr.c_str(), configOptionsStr.c_str(), usePinnedMemory, verbose, callbackStream
+        );
+      } else {
+        theSolver = new AmgXGenLinSolverFloat(
+            configFileStr.c_str(), configOptionsStr.c_str(), usePinnedMemory, verbose, callbackStream
+        );
+      }
     }
     theSOE = new AmgXGenLinSOE(*theSolver, blockSize, paddingEnabled, verbose);
   }

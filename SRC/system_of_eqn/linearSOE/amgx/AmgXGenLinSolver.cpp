@@ -43,18 +43,35 @@
 using MatrixStatus = AmgXGenLinSOE::AmgXMatrixStatus;
 
 // Static member initialization
-bool AmgXGenLinSolver::m_AmgXInitialized = false;
-int AmgXGenLinSolver::m_ActiveSolverInstances = 0;
-AMGX_resources_handle AmgXGenLinSolver::m_Resources = nullptr;
-OPS_Stream* AmgXGenLinSolver::m_CallbackStream = (OPS_Stream*)&opserr;
+template<typename DataType>
+bool AmgXGenLinSolver<DataType>::m_AmgXInitialized = false;
+
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::m_ActiveSolverInstances = 0;
+
+template<typename DataType>
+AMGX_resources_handle AmgXGenLinSolver<DataType>::m_Resources = nullptr;
+
+template<typename DataType>
+OPS_Stream* AmgXGenLinSolver<DataType>::m_CallbackStream = (OPS_Stream*)&opserr;
 
 /* AMGX callbacks */
 #ifdef __cplusplus
 extern "C" {
 #endif
-void AmgXCallback(const char* msg, int length) {
+void AmgXCallbackDouble(const char* msg, int length) {
     if (msg && length > 0) {
-        OPS_Stream* callbackStream = AmgXGenLinSolver::getCallbackStream();
+        OPS_Stream* callbackStream = AmgXGenLinSolver<double>::getCallbackStream();
+        if (callbackStream) {
+            *callbackStream << msg;
+            *callbackStream << endln;
+        }
+    }
+}
+
+void AmgXCallbackFloat(const char* msg, int length) {
+    if (msg && length > 0) {
+        OPS_Stream* callbackStream = AmgXGenLinSolver<float>::getCallbackStream();
         if (callbackStream) {
             *callbackStream << msg;
             *callbackStream << endln;
@@ -173,32 +190,39 @@ namespace {
     }
 }
 
-AmgXGenLinSolver::AmgXGenLinSolver(
+template<typename DataType>
+AmgXGenLinSolver<DataType>::AmgXGenLinSolver(
     const std::string solver, const std::string preconditioner, const std::string smoother, 
     int max_iters, double abs_tolerance, double rel_tolerance, int monitor_residual, 
-    const std::string mode, bool usePinnedMemory, bool verbose)
+    bool usePinnedMemory, bool verbose)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
-    m_usePinnedMemory(usePinnedMemory), m_verbose(verbose)
+    m_usePinnedMemory(usePinnedMemory), m_verbose(verbose),
+    m_Aptr(nullptr), m_Bptr(nullptr), m_Xptr(nullptr),
+    m_AFloatData(nullptr), m_BFloatData(nullptr), m_XFloatData(nullptr), m_ownsFloatData(false)
 {
     std::string configOptions = getDefaultConfigOptions(
         solver, preconditioner, smoother, max_iters, 
         abs_tolerance, rel_tolerance, monitor_residual);
     const char* nullConfigFile = nullptr;
-    _init(nullConfigFile, configOptions.c_str(), mode.c_str());
+    _init(nullConfigFile, configOptions.c_str());
 }
 
-AmgXGenLinSolver::AmgXGenLinSolver( 
+template<typename DataType>
+AmgXGenLinSolver<DataType>::AmgXGenLinSolver( 
     const char *configFile, const char *configOptions, 
-    const char* mode, bool usePinnedMemory, bool verbose,
+    bool usePinnedMemory, bool verbose,
     OPS_Stream* callbackStream)
     :LinearSOESolver(SOLVER_TAGS_AmgXGenLinSolver), theSOE(0), 
-    m_usePinnedMemory(usePinnedMemory), m_verbose(verbose)
+    m_usePinnedMemory(usePinnedMemory), m_verbose(verbose),
+    m_Aptr(nullptr), m_Bptr(nullptr), m_Xptr(nullptr),
+    m_AFloatData(nullptr), m_BFloatData(nullptr), m_XFloatData(nullptr), m_ownsFloatData(false)
 {
-    _init(configFile, configOptions, mode, callbackStream);
+    _init(configFile, configOptions, callbackStream);
 }
 
-void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions, 
-                        const char* mode, OPS_Stream* callbackStream) 
+template<typename DataType>
+void AmgXGenLinSolver<DataType>::_init(const char *configFile, const char *configOptions, 
+                        OPS_Stream* callbackStream) 
 {
     /* Initialize AMGX library - only done once across all instances */
     if (!m_AmgXInitialized) {
@@ -206,8 +230,12 @@ void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions,
         AMGX_SAFE_CALL(AMGX_install_signal_handler());
         m_AmgXInitialized = true;
     }
-    AmgXGenLinSolver::setCallbackStream(callbackStream);
-    AMGX_SAFE_CALL(AMGX_register_print_callback(AmgXCallback));
+    AmgXGenLinSolver<DataType>::setCallbackStream(callbackStream);
+    if constexpr (std::is_same_v<DataType, double>) {
+        AMGX_SAFE_CALL(AMGX_register_print_callback(AmgXCallbackDouble));
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        AMGX_SAFE_CALL(AMGX_register_print_callback(AmgXCallbackFloat));
+    }
 
     if (configFile != nullptr && strlen(configFile) > 0 && configOptions != nullptr && strlen(configOptions) > 0) {
         AMGX_SAFE_CALL(AMGX_config_create_from_file_and_string(&m_Config, configFile, configOptions));
@@ -262,12 +290,12 @@ void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions,
     }
 
     /* Set AmgX mode */
-    if(strcmp(mode, "dDDI") == 0) {
-        m_Mode = AMGX_mode_dDDI;
-    } else {
-        opserr << "WARNING: AmgXGenLinSolver: Invalid mode (" << mode << "). Only mode=dDDI is supported.\n";
-        return;
+    if constexpr (std::is_same_v<DataType, double>) {
+        m_Mode = AMGX_mode_dDDI; // device, double matrix, double vector, int index
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        m_Mode = AMGX_mode_dFFI; // device, float matrix, float vector, int index
     }
+
     /* Create solver, matrix, rhs and solution vectors */
     AMGX_solver_create(&m_Solver, m_Resources, m_Mode, m_Config);
     AMGX_matrix_create(&m_Matrix, m_Resources, m_Mode);
@@ -277,7 +305,15 @@ void AmgXGenLinSolver::_init(const char *configFile, const char *configOptions,
     m_ActiveSolverInstances++;
 }
 
-AmgXGenLinSolver::~AmgXGenLinSolver() {
+template<typename DataType>
+AmgXGenLinSolver<DataType>::~AmgXGenLinSolver() {
+    /* Free allocated float data if we own it */
+    if (m_ownsFloatData) {
+        if (m_AFloatData) delete[] m_AFloatData;
+        if (m_BFloatData) delete[] m_BFloatData;
+        if (m_XFloatData) delete[] m_XFloatData;
+    }
+    
     /* AMGX solver destroy must be called prior to AMGX matrix destroy. 
       See AMGX Reference Manual V2.0 (2017), Section 1.4.2 */
     AMGX_solver_destroy(m_Solver);
@@ -305,7 +341,8 @@ AmgXGenLinSolver::~AmgXGenLinSolver() {
     }
 }
 
-int AmgXGenLinSolver::solve() {
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::solve() {
     /* Obtain information about the matrix structure */
     int numRowBlocks = theSOE->m_ARowPtrBlock.size() - 1;
     int nnzBlocks = theSOE->m_AColIdxBlock.size();
@@ -336,6 +373,37 @@ int AmgXGenLinSolver::solve() {
         return -1;
     }
     
+    /* Set up data pointers based on DataType */
+    if constexpr (std::is_same_v<DataType, double>) {
+        // For double, use the original data directly
+        m_Aptr = theSOE->m_AValuesBlock.data();
+        m_Bptr = theSOE->m_BPadded.data();
+        m_Xptr = theSOE->m_XPadded.data();
+    } else if constexpr (std::is_same_v<DataType, float>) {
+        // For float, allocate memory and cast the data
+        if (!m_ownsFloatData) {
+            m_AFloatData = new float[totalNNZ];
+            m_BFloatData = new float[theSOE->m_BPadded.size()];
+            m_XFloatData = new float[theSOE->m_XPadded.size()];
+            m_ownsFloatData = true;
+        }
+        
+        // Cast double data to float
+        for (int i = 0; i < totalNNZ; ++i) {
+            m_AFloatData[i] = static_cast<float>(theSOE->m_AValuesBlock[i]);
+        }
+        for (int i = 0; i < theSOE->m_BPadded.size(); ++i) {
+            m_BFloatData[i] = static_cast<float>(theSOE->m_BPadded[i]);
+        }
+        for (int i = 0; i < theSOE->m_XPadded.size(); ++i) {
+            m_XFloatData[i] = static_cast<float>(theSOE->m_XPadded[i]);
+        }
+        
+        m_Aptr = m_AFloatData;
+        m_Bptr = m_BFloatData;
+        m_Xptr = m_XFloatData;
+    }
+    
     /* Upload the system matrix to the GPU */
     switch (theSOE->m_matrixStatus) {
         case MatrixStatus::STRUCTURE_CHANGED: /* Entire matrix needs to be reloaded*/
@@ -353,35 +421,35 @@ int AmgXGenLinSolver::solve() {
                     sizeof(int) * (nnzBlocks)
                 ));
                 AMGX_SAFE_CALL(AMGX_pin_memory(
-                    (void*)(theSOE->m_AValuesBlock.data()), 
-                    sizeof(double) * (totalNNZ)
+                    (void*)(m_Aptr), 
+                    sizeof(DataType) * (totalNNZ)
                 ));
             }
             AMGX_matrix_upload_all(
                 m_Matrix, numRowBlocks, nnzBlocks, 
                 blockSize, blockSize, theSOE->m_ARowPtrBlock.data(), 
-                theSOE->m_AColIdxBlock.data(), theSOE->m_AValuesBlock.data(), nullptr
+                theSOE->m_AColIdxBlock.data(), m_Aptr, nullptr
             );
             if (m_Mode == AMGX_mode_dDDI && m_usePinnedMemory) {
                 AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->m_ARowPtrBlock.data())));
                 AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->m_AColIdxBlock.data())));
-                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->m_AValuesBlock.data())));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(m_Aptr)));
             }
             AMGX_solver_setup(m_Solver, m_Matrix);
             break;
         case MatrixStatus::COEFFICIENTS_CHANGED: /* Only the matrix coefficients have changed */
             if (m_Mode == AMGX_mode_dDDI && m_usePinnedMemory) {
                 AMGX_SAFE_CALL(AMGX_pin_memory(
-                    (void*)(theSOE->m_AValuesBlock.data()), 
-                    sizeof(double) * (totalNNZ)
+                    (void*)(m_Aptr), 
+                    sizeof(DataType) * (totalNNZ)
                 ));
             }
             AMGX_matrix_replace_coefficients(
                 m_Matrix, numRowBlocks, nnzBlocks, 
-                theSOE->m_AValuesBlock.data(), nullptr
+                m_Aptr, nullptr
             );
             if (m_Mode == AMGX_mode_dDDI && m_usePinnedMemory) {
-                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(theSOE->m_AValuesBlock.data())));
+                AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(m_Aptr)));
             }
             AMGX_solver_setup(m_Solver, m_Matrix);
             break;
@@ -397,13 +465,11 @@ int AmgXGenLinSolver::solve() {
     }
 
     /* Upload the RHS vector to the GPU*/
-    double* X_ptr = theSOE->m_XPadded.data(); //&(theSOE->m_X(0));
-    double* B_ptr = theSOE->m_BPadded.data(); //&(theSOE->m_B(0));
     if (m_Mode == AMGX_mode_dDDI && m_usePinnedMemory) {
-        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(B_ptr), sizeof(double) * (theSOE->m_BPadded.size())));
-        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(X_ptr), sizeof(double) * (theSOE->m_XPadded.size())));
+        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(m_Bptr), sizeof(DataType) * (theSOE->m_BPadded.size())));
+        AMGX_SAFE_CALL(AMGX_pin_memory((void*)(m_Xptr), sizeof(DataType) * (theSOE->m_XPadded.size())));
     }
-    AMGX_vector_upload(m_RHS, numRowBlocks, blockSize, B_ptr);
+    AMGX_vector_upload(m_RHS, numRowBlocks, blockSize, m_Bptr);
     
     /* Solve with 0-vector initial guess */
     AMGX_vector_set_zero(m_Solution, numRowBlocks, blockSize);
@@ -412,10 +478,17 @@ int AmgXGenLinSolver::solve() {
     double finalResidualNorm = this->getResidualNorm();
 
     /* Download the solution vector from the GPU */
-    AMGX_vector_download(m_Solution, X_ptr);
+    AMGX_vector_download(m_Solution, m_Xptr);
     if (m_Mode == AMGX_mode_dDDI && m_usePinnedMemory) {
-        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(X_ptr)));
-        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(B_ptr)));
+        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(m_Xptr)));
+        AMGX_SAFE_CALL(AMGX_unpin_memory((void*)(m_Bptr)));
+    }
+
+    /* Copy solution back to the original double arrays if using float */
+    if constexpr (std::is_same_v<DataType, float>) {
+        for (int i = 0; i < theSOE->m_XPadded.size(); ++i) {
+            theSOE->m_XPadded[i] = static_cast<double>(m_Xptr[i]);
+        }
     }
 
     /* AMGX check status */
@@ -437,24 +510,28 @@ int AmgXGenLinSolver::solve() {
     return 0;
 }
 
-int AmgXGenLinSolver::setSize()
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::setSize()
 {
     return 0;
 }
 
-int AmgXGenLinSolver::setLinearSOE(AmgXGenLinSOE &theLinearSOE)
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::setLinearSOE(AmgXGenLinSOE &theLinearSOE)
 {
     theSOE = &theLinearSOE;
     return 0;
 }
 
-int AmgXGenLinSolver::sendSelf(int cTag, Channel &theChannel)
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::sendSelf(int cTag, Channel &theChannel)
 {
     // nothing to do
     return 0;
 }
 
-int AmgXGenLinSolver::recvSelf(int ctag,
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::recvSelf(int ctag,
 			      Channel &theChannel, 
 			      FEM_ObjectBroker &theBroker)
 {
@@ -462,7 +539,8 @@ int AmgXGenLinSolver::recvSelf(int ctag,
     return 0;
 }
 
-int AmgXGenLinSolver::getNumIterations() {
+template<typename DataType>
+int AmgXGenLinSolver<DataType>::getNumIterations() {
     int numIterations;
     if (m_Solver == nullptr) {
         opserr << "WARNING: AmgXGenLinSolver::getNumIterations: Solver not initialized" << endln;
@@ -472,7 +550,8 @@ int AmgXGenLinSolver::getNumIterations() {
     return numIterations;
 }
 
-double AmgXGenLinSolver::getResidualNorm() {
+template<typename DataType>
+double AmgXGenLinSolver<DataType>::getResidualNorm() {
     if (m_Solver == nullptr || m_Matrix == nullptr || m_RHS == nullptr || m_Solution == nullptr || theSOE == nullptr) {
         opserr << "WARNING: AmgXGenLinSolver::getResidualNorm: Solver, matrix, RHS, solution vector or LinearSOE not initialized" << endln;
         return 0.0;

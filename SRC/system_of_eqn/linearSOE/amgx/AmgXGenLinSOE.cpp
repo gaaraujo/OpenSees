@@ -43,7 +43,7 @@
 #include <FEM_ObjectBroker.h>
 #include <ID.h>
 
-AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver, 
+AmgXGenLinSOE::AmgXGenLinSOE(LinearSOESolver &the_Solver, 
                              int blockSize, bool paddingEnabled,
                              bool verbose)
     : LinearSOE(the_Solver, LinSOE_TAGS_AmgXGenLinSOE), 
@@ -53,7 +53,22 @@ AmgXGenLinSOE::AmgXGenLinSOE(AmgXGenLinSolver &the_Solver,
     m_paddingEnabled(paddingEnabled),
     m_verbose(verbose)
 {
-    the_Solver.setLinearSOE(*this);
+    // Try to cast to AmgXGenLinSolver<double> first
+    AmgXGenLinSolver<double>* doubleSolver = dynamic_cast<AmgXGenLinSolver<double>*>(&the_Solver);
+    if (doubleSolver) {
+        doubleSolver->setLinearSOE(*this);
+        return;
+    }
+    
+    // Try to cast to AmgXGenLinSolver<float>
+    AmgXGenLinSolver<float>* floatSolver = dynamic_cast<AmgXGenLinSolver<float>*>(&the_Solver);
+    if (floatSolver) {
+        floatSolver->setLinearSOE(*this);
+        return;
+    }
+    
+    // If neither cast works, this is not an AmgXGenLinSolver
+    opserr << "WARNING: AmgXGenLinSOE constructor: Solver is not an AmgXGenLinSolver\n";
 }
 
 AmgXGenLinSOE::AmgXGenLinSOE(): LinearSOE(LinSOE_TAGS_AmgXGenLinSOE), 
@@ -499,18 +514,41 @@ double AmgXGenLinSOE::normRHS(void)
     return m_B.Norm();
 }
 
-int AmgXGenLinSOE::setAmgXGenLinSolver(AmgXGenLinSolver &newSolver)
+int AmgXGenLinSOE::setAmgXGenLinSolver(LinearSOESolver &newSolver)
 {
-    newSolver.setLinearSOE(*this);
-    if (m_X.Size() != 0) {
-        int solverOK = newSolver.setSize();
-        if (solverOK < 0) {
-            opserr << "WARNING: AmgXGenLinSOE::setSolver :";
-            opserr << "the new solver could not setSize() - staying with old\n";
-            return -1;
+    // Try to cast to AmgXGenLinSolver<double> first
+    AmgXGenLinSolver<double>* doubleSolver = dynamic_cast<AmgXGenLinSolver<double>*>(&newSolver);
+    if (doubleSolver) {
+        doubleSolver->setLinearSOE(*this);
+        if (m_X.Size() != 0) {
+            int solverOK = doubleSolver->setSize();
+            if (solverOK < 0) {
+                opserr << "WARNING: AmgXGenLinSOE::setSolver :";
+                opserr << "the new solver could not setSize() - staying with old\n";
+                return -1;
+            }
         }
+        return this->LinearSOE::setSolver(newSolver);
     }
-    return this->LinearSOE::setSolver(newSolver);
+    
+    // Try to cast to AmgXGenLinSolver<float>
+    AmgXGenLinSolver<float>* floatSolver = dynamic_cast<AmgXGenLinSolver<float>*>(&newSolver);
+    if (floatSolver) {
+        floatSolver->setLinearSOE(*this);
+        if (m_X.Size() != 0) {
+            int solverOK = floatSolver->setSize();
+            if (solverOK < 0) {
+                opserr << "WARNING: AmgXGenLinSOE::setSolver :";
+                opserr << "the new solver could not setSize() - staying with old\n";
+                return -1;
+            }
+        }
+        return this->LinearSOE::setSolver(newSolver);
+    }
+    
+    // If neither cast works, this is not an AmgXGenLinSolver
+    opserr << "WARNING: AmgXGenLinSOE::setAmgXGenLinSolver: Solver is not an AmgXGenLinSolver\n";
+    return -1;
 }
 
 // Fill padded diagonals with a user-supplied value plus an automatically computed value

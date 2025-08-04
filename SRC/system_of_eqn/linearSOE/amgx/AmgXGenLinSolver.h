@@ -53,24 +53,26 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-void AmgXCallback(const char* msg, int length);
+void AmgXCallbackDouble(const char* msg, int length);
+void AmgXCallbackFloat(const char* msg, int length);
 #ifdef __cplusplus
 }
 #endif
 
 class AmgXGenLinSOE;
 
+template<typename DataType>
 class AmgXGenLinSolver : public LinearSOESolver
 {
     public:
         // Constructor with default config
         AmgXGenLinSolver(const std::string solver = "PCG", const std::string preconditioner = "AMG", 
             std::string smoother = "JACOBI_L1", int max_iters = 1000, double abs_tolerance = 1e-12, 
-            double rel_tolerance = 1e-6, int monitor_residual = 1, const std::string mode = "dDDI", 
+            double rel_tolerance = 1e-6, int monitor_residual = 1, 
             bool usePinnedMemory = true, bool verbose = false);
         // Constructor with config file and options
-        AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr, 
-            const char* mode = "dDDI", bool usePinnedMemory = true, bool verbose = false,
+        AmgXGenLinSolver(const char *configFile = nullptr, const char *configOptions = nullptr,
+            bool usePinnedMemory = true, bool verbose = false,
             OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
         // Destructor
         ~AmgXGenLinSolver();
@@ -96,11 +98,21 @@ class AmgXGenLinSolver : public LinearSOESolver
         AmgXGenLinSOE *theSOE;
         bool m_usePinnedMemory;
         bool m_verbose;
-
+        
+        // Pointer to matrix and vector data
+        DataType* m_Aptr;
+        DataType* m_Bptr;
+        DataType* m_Xptr;
+        
+        // Memory management for float data
+        DataType* m_AFloatData;
+        DataType* m_BFloatData;
+        DataType* m_XFloatData;
+        bool m_ownsFloatData;
+        
         // AMGX initializer (to be used by constructors only)
         void _init(const char *configFile = nullptr, 
                    const char *configOptions = nullptr, 
-                   const char* mode = "dDDI",
                    OPS_Stream* callbackStream = (OPS_Stream*)&opserr);
 
         // Static members for global state
@@ -117,5 +129,13 @@ class AmgXGenLinSolver : public LinearSOESolver
         AMGX_solver_handle    m_Solver       = nullptr;  ///< Solver handle
         AMGX_Mode             m_Mode;                    ///< Solver mode
 };
+
+// Explicit template instantiations
+template class AmgXGenLinSolver<double>;
+template class AmgXGenLinSolver<float>;
+
+// Type aliases for convenience
+using AmgXGenLinSolverDouble = AmgXGenLinSolver<double>;
+using AmgXGenLinSolverFloat = AmgXGenLinSolver<float>;
 
 #endif
