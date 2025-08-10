@@ -53,6 +53,13 @@ AmgXGenLinSOE::AmgXGenLinSOE(LinearSOESolver &the_Solver,
     m_paddingEnabled(paddingEnabled),
     m_verbose(verbose)
 {
+    // Validate block size
+    if (!isValidBlockSize(blockSize)) {
+        opserr << "WARNING: AmgXGenLinSOE constructor: Invalid block size " << blockSize 
+               << ". Using default block size " << DEFAULT_BLOCK_SIZE << endln;
+        m_BlockSize = DEFAULT_BLOCK_SIZE;
+    }
+    
     // Try to cast to AmgXGenLinSolver<double> first
     AmgXGenLinSolver<double>* doubleSolver = dynamic_cast<AmgXGenLinSolver<double>*>(&the_Solver);
     if (doubleSolver) {
@@ -73,7 +80,7 @@ AmgXGenLinSOE::AmgXGenLinSOE(LinearSOESolver &the_Solver,
 
 AmgXGenLinSOE::AmgXGenLinSOE(): LinearSOE(LinSOE_TAGS_AmgXGenLinSOE), 
     m_X(), m_B(), m_XPadded(), m_BPadded(), m_ARowPtrBlock(), m_AColIdxBlock(), m_AValuesBlock(), 
-    m_BlockSize(0),
+    m_BlockSize(DEFAULT_BLOCK_SIZE),
     m_matrixStatus(AmgXMatrixStatus::STRUCTURE_CHANGED),
     m_paddingEnabled(true),
     m_verbose(false)
@@ -86,6 +93,17 @@ AmgXGenLinSOE::~AmgXGenLinSOE()
     
 }
 
+// Validation methods
+bool AmgXGenLinSOE::isValidBlockSize(int blockSize) const
+{
+    return blockSize > 0 && blockSize <= MAX_BLOCK_SIZE;
+}
+
+bool AmgXGenLinSOE::isValidGlobalIndex(int index) const
+{
+    return index >= 0 && index < m_X.Size();
+}
+
 int AmgXGenLinSOE::getNumEqn(void) const 
 {
     return m_X.Size();
@@ -95,7 +113,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
 {
     int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "size of soe < 0\n";
+        opserr << "ERROR: AmgXGenLinSOE::setSize: size of soe < 0\n";
         return -1;
     }
 
@@ -108,37 +126,32 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     VertexIter &theVertices = theGraph.getVertices();
     while ((theVertex = theVertices()) != 0) {
         const ID &theAdjacency = theVertex->getAdjacency();
-        nnz += theAdjacency.Size() +1; // the +1 is for the diag entry
+        nnz += theAdjacency.Size() + 1; // the +1 is for the diag entry
     }
 
-    // Estimate the block size
+    // Estimate the block size if not provided
     if (m_BlockSize == 0) {
-        const double efficiency = 0.7;
-        m_BlockSize = estimateBlockSize(theGraph, nnz, efficiency);
+        m_BlockSize = estimateBlockSize(theGraph, nnz, DEFAULT_EFFICIENCY_THRESHOLD);
         if (m_verbose) {
-            opserr << "WARNING: AmgXGenLinSOE::setSize : Provided block size is 0. \n";
-            opserr << "- Automatically estimating block size that results in storage efficiency of at least " << efficiency << "...\n";
-            opserr << "- Estimated block size: " << m_BlockSize << endln;
+            opserr << "INFO: AmgXGenLinSOE::setSize: Automatically estimating block size for efficiency >= " 
+                   << DEFAULT_EFFICIENCY_THRESHOLD << endln;
+            opserr << "      Estimated block size: " << m_BlockSize << endln;
         }
     }
 
-    if (m_BlockSize <= 0 || m_BlockSize > 32) {
-        opserr << "WARNING: either block size could not be estimated ";
-        opserr << "or provided block size is invalid. ";
-        opserr << "Please manually provide a positive block size. -- AmgXGenLinSOE::setSize" << endln;
+    // Validate the block size
+    if (!isValidBlockSize(m_BlockSize)) {
+        opserr << "ERROR: AmgXGenLinSOE::setSize: Invalid block size " << m_BlockSize 
+               << ". Must be between 1 and " << MAX_BLOCK_SIZE << endln;
         return -1;
     }
-
-    // if (m_BlockSize != 1 && m_BlockSize != 4) {
-    //     opserr << "WARNING: AmgXGenLinSOE::setSize : Most AmgX solvers only support block size 1 or 4. \n";
-    //     opserr << "- Watch out for any AMGX errors in the output. \n";
-    //     opserr << "- If you get errors related to the blockSize, try passing -blockSize 1 or -blockSize 4 to system AmgX. \n";
-    // }
     
-    if (size % m_BlockSize != 0 && m_paddingEnabled == false) {
-        opserr << "WARNING: the number of equations (" << size << ") is not divisible by the block size (" << m_BlockSize << "). \n";
-        opserr << "Please provide a block size that divides the number of equations evenly, ";
-        opserr << "or set the block size to 0 to automatically estimate it. -- AmgXGenLinSOE::setSize" << endln;
+    // Check if padding is needed
+    if (size % m_BlockSize != 0 && !m_paddingEnabled) {
+        opserr << "ERROR: AmgXGenLinSOE::setSize: The number of equations (" << size 
+               << ") is not divisible by the block size (" << m_BlockSize << ").\n";
+        opserr << "      Please provide a block size that divides the number of equations evenly, ";
+        opserr << "or set the block size to 0 to automatically estimate it." << endln;
         return -1;
     }
 
@@ -146,6 +159,15 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     m_ARowPtrBlock.clear();
     m_AColIdxBlock.clear();
     m_AValuesBlock.clear();
+
+    // If padding is enabled, pad the matrix with zeros to make it a multiple of the block size
+    if (m_paddingEnabled && size % m_BlockSize != 0) {
+        size = ((originalSize + m_BlockSize - 1) / m_BlockSize) * m_BlockSize;
+        if (m_verbose) {
+            opserr << "INFO: AmgXGenLinSOE::setSize: Padding enabled.\n";
+            opserr << "      Original size: " << originalSize << ", Padded size: " << size << endln;
+        }
+    }
 
     // Special case for BlockSize = 1 - treat as regular CSR format
     if (m_BlockSize == 1) {
@@ -160,8 +182,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
         for (int row = 0; row < size; ++row) {
             theVertex = theGraph.getVertexPtr(row);
             if (theVertex == nullptr) {
-                opserr << "WARNING: AmgXGenLinSOE::setSize :"
-                    << " vertex " << row << " not in graph! - size set to 0\n";
+                opserr << "ERROR: AmgXGenLinSOE::setSize: vertex " << row << " not in graph!\n";
                 size = 0;
                 return -1;
             }
@@ -186,17 +207,6 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             m_ARowPtrBlock.push_back(m_AColIdxBlock.size());
         }
     } else {
-        // If padding is enabled, pad the matrix with zeros to make it a multiple of the block size
-        if (m_paddingEnabled) {
-            size = ((originalSize + m_BlockSize - 1) / m_BlockSize) * m_BlockSize;
-            if (size > originalSize && m_verbose) {
-                opserr << "WARNING: AmgXGenLinSOE::setSize : Padding is enabled. \n";
-                opserr << "- Padding the matrix with zeros to make it a multiple of the block size. \n";
-                opserr << "- Original size: " << originalSize << ", \n";
-                opserr << "- Padded size: " << size << endln;
-            }
-        }
-
         // Block size > 1 -> block CSR format
         const int numBlockRows = size / m_BlockSize;
         const int numBlockCols = size / m_BlockSize;
@@ -225,8 +235,7 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             
             theVertex = theGraph.getVertexPtr(row);
             if (theVertex == nullptr) {
-                opserr << "WARNING: AmgXGenLinSOE::setSize :"
-                    << " vertex " << row << " not in graph! - size set to 0\n";
+                opserr << "ERROR: AmgXGenLinSOE::setSize: vertex " << row << " not in graph!\n";
                 size = 0;
                 return -1;
             }
@@ -251,13 +260,19 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
 
         // Fill m_AColIdxBlock and allocate m_AValuesBlock
         const int nnzBlock = m_ARowPtrBlock[numBlockRows];
-        m_AColIdxBlock.reserve(nnzBlock);
+        m_AColIdxBlock.resize(nnzBlock, 0);
         m_AValuesBlock.resize(nnzBlock * m_BlockSize * m_BlockSize, 0.0);
 
+        // Copy the block column indices
+        int blockIdx = 0;
         for (int blockRow = 0; blockRow < numBlockRows; ++blockRow) {
-            const ID& theColIdx = colIdxPerBlockRow[blockRow];
-            for (int blockCol = 0; blockCol < theColIdx.Size(); ++blockCol) {
-                m_AColIdxBlock.push_back(theColIdx(blockCol));
+            const int rowStart = m_ARowPtrBlock[blockRow];
+            const int rowEnd = m_ARowPtrBlock[blockRow + 1];
+            const ID& blockColIdx = colIdxPerBlockRow[blockRow];
+            const int numBlockCols = blockColIdx.Size();
+            for (int blockCol = 0; blockCol < numBlockCols; ++blockCol) {
+                m_AColIdxBlock[blockIdx] = blockColIdx(blockCol);
+                blockIdx++;
             }
         }
     }
@@ -275,11 +290,69 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
     LinearSOESolver *the_Solver = this->getSolver();
     int solverOK = the_Solver->setSize();
     if (solverOK < 0) {
-        opserr << "WARNING: AmgXGenLinSOE::setSize :";
+        opserr << "ERROR: AmgXGenLinSOE::setSize :";
         opserr << " solver failed setSize()\n";
         return solverOK;
     }
     return 0;
+}
+
+// Helper methods for matrix assembly to reduce code duplication
+int AmgXGenLinSOE::addAMatrixElement(int globalRow, int globalCol, double value)
+{
+    if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol)) {
+        return -1;
+    }
+
+    if (m_BlockSize > 1) {
+        return addAMatrixElementBlock(globalRow, globalCol, value);
+    } else {
+        return addAMatrixElementStandard(globalRow, globalCol, value);
+    }
+}
+
+int AmgXGenLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, double value)
+{
+    const int blockRow = globalRow / m_BlockSize;
+    const int localRow = globalRow % m_BlockSize;
+    const int blockCol = globalCol / m_BlockSize;
+    const int localCol = globalCol % m_BlockSize;
+    
+    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
+    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
+    const int startRowPtr = m_ARowPtrBlock[blockRow];
+    const int endRowPtr = m_ARowPtrBlock[blockRow + 1];
+    for (int k = startRowPtr; k < endRowPtr; ++k) {
+        if (m_AColIdxBlock[k] == blockCol) {
+            // Block k holds the blockRow, blockCol block
+            const int blockOffset = k * m_BlockSize * m_BlockSize;
+            const int localOffset = localRow * m_BlockSize + localCol; // row-major
+            m_AValuesBlock[blockOffset + localOffset] += value;
+            return 0;
+        }
+    }
+    
+    opserr << "ERROR: AmgXGenLinSOE::addAMatrixElementBlock: Could not find block for row " 
+           << globalRow << ", col " << globalCol << endln;
+    return -1;
+}
+
+int AmgXGenLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, double value)
+{
+    // Find the column index in m_AColIdxBlock where m_AColIdxBlock[k] == globalCol 
+    // and k is in [m_ARowPtrBlock[globalRow], m_ARowPtrBlock[globalRow + 1])
+    const int startRowPtr = m_ARowPtrBlock[globalRow];
+    const int endRowPtr = m_ARowPtrBlock[globalRow + 1];
+    for (int k = startRowPtr; k < endRowPtr; ++k) {
+        if (m_AColIdxBlock[k] == globalCol) {
+            m_AValuesBlock[k] += value;
+            return 0;
+        }
+    }
+    
+    opserr << "WARNING: AmgXGenLinSOE::addAMatrixElementStandard: Could not find element for row " 
+           << globalRow << ", col " << globalCol << endln;
+    return -1;
 }
 
 int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
@@ -293,102 +366,25 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     // Check that m and id are of similar size
     if (idSize != m.noRows() && idSize != m.noCols()) {
-        opserr << "WARNING: AmgXGenLinSOE::addA() ";
-        opserr << " - Matrix and ID not of similar sizes\n";
+        opserr << "ERROR: AmgXGenLinSOE::addA: Matrix and ID not of similar sizes\n";
         return -1;
     }
     
     const int size = m_X.Size();
 
-    if (m_BlockSize > 1) { // Block CSR format
-        const int blockSizeSquared = m_BlockSize * m_BlockSize;
-        if (fact == 1.0) { // Do not need to multiply by fact
-            for (int i = 0; i < idSize; ++i) {
-                const int globalRow = id(i);
-                if (globalRow < 0 || globalRow >= size) continue;
-                const int blockRow = globalRow / m_BlockSize;
-                const int localRow = globalRow % m_BlockSize;
+    // Add matrix elements using the helper methods
+    for (int i = 0; i < idSize; ++i) {
+        const int globalRow = id(i);
+        if (!isValidGlobalIndex(globalRow)) continue;
 
-                for (int j = 0; j < idSize; ++j) {
-                    const int globalCol = id(j);
-                    if (globalCol < 0 || globalCol >= size) continue;
-                    const int blockCol = globalCol / m_BlockSize;
-                    const int localCol = globalCol % m_BlockSize;
-                    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
-                    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
-                    for (int k = m_ARowPtrBlock[blockRow]; k < m_ARowPtrBlock[blockRow + 1]; ++k) {
-                        if (m_AColIdxBlock[k] == blockCol) {
-                            // Block k holds the blockRow, blockCol block
-                            const int blockOffset = k * blockSizeSquared;
-                            const int localOffset = localRow * m_BlockSize + localCol; // row-major
-                            m_AValuesBlock[blockOffset + localOffset] += m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        } else { // Multiply by fact
-            for (int i = 0; i < idSize; ++i) {
-                const int globalRow = id(i);
-                if (globalRow < 0 || globalRow >= size) continue;
-                const int blockRow = globalRow / m_BlockSize;
-                const int localRow = globalRow % m_BlockSize;
-
-                for (int j = 0; j < idSize; ++j) {
-                    const int globalCol = id(j);
-                    if (globalCol < 0 || globalCol >= size) continue;
-                    const int blockCol = globalCol / m_BlockSize;
-                    const int localCol = globalCol % m_BlockSize;
-                    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
-                    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
-                    for (int k = m_ARowPtrBlock[blockRow]; k < m_ARowPtrBlock[blockRow + 1]; ++k) {
-                        if (m_AColIdxBlock[k] == blockCol) {
-                            // Block k holds the blockRow, blockCol block
-                            const int blockOffset = k * blockSizeSquared;
-                            const int localOffset = localRow * m_BlockSize + localCol; // row-major
-                            m_AValuesBlock[blockOffset + localOffset] += fact * m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else { // m_BlockSize == 1
-        if (fact == 1.0) { // Do not need to multiply by fact
-            for (int i = 0; i < idSize; ++i) {
-                const int globalRow = id(i);
-                if (globalRow < 0 || globalRow >= size) continue;
-
-                for (int j = 0; j < idSize; ++j) {
-                    const int globalCol = id(j);
-                    if (globalCol < 0 || globalCol >= size) continue;
-                    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
-                    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
-                    for (int k = m_ARowPtrBlock[globalRow]; k < m_ARowPtrBlock[globalRow + 1]; ++k) {
-                        if (m_AColIdxBlock[k] == globalCol) {
-                            m_AValuesBlock[k] += m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        } else { // Multiply by fact
-            for (int i = 0; i < idSize; ++i) {
-                const int globalRow = id(i);
-                if (globalRow < 0 || globalRow >= size) continue;
-
-                for (int j = 0; j < idSize; ++j) {
-                    const int globalCol = id(j);
-                    if (globalCol < 0 || globalCol >= size) continue;
-                    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
-                    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
-                    for (int k = m_ARowPtrBlock[globalRow]; k < m_ARowPtrBlock[globalRow + 1]; ++k) {
-                        if (m_AColIdxBlock[k] == globalCol) {
-                            m_AValuesBlock[k] += fact * m(i, j);
-                            break;
-                        }
-                    }
-                }
+        for (int j = 0; j < idSize; ++j) {
+            const int globalCol = id(j);
+            if (!isValidGlobalIndex(globalCol)) continue;
+            
+            double value = applyFact(m(i, j), fact);
+            if (addAMatrixElement(globalRow, globalCol, value) != 0) {
+                opserr << "WARNING: AmgXGenLinSOE::addA: Failed to add element at (" 
+                       << globalRow << ", " << globalCol << ")\n";
             }
         }
     }
@@ -403,30 +399,24 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
 int AmgXGenLinSOE::addB(const Vector &v, const ID &id, double fact)
 {
-    if (fact == 0.0) return 0;
+    // Check for a quick return
+    if (fact == 0.0) {
+        return 0;
+    }
 
     const int idSize = id.Size();
+
+    // Check that v and id are of similar size
     if (idSize != v.Size()) {
-        opserr << "WARNING: AmgXGenLinSOE::addB() - Vector and ID not of similar sizes\n";
+        opserr << "ERROR: AmgXGenLinSOE::addB: Vector and ID not of similar sizes\n";
         return -1;
     }
 
-    const int size = m_B.Size();
-
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int pos = id(i);
-            if (pos >= 0 && pos < size) m_B[pos] += v(i);
-        }
-    } else if (fact == -1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int pos = id(i);
-            if (pos >= 0 && pos < size) m_B[pos] -= v(i);
-        }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int pos = id(i);
-            if (pos >= 0 && pos < size) m_B[pos] += fact * v(i);
+    // Add vector elements
+    for (int i = 0; i < idSize; ++i) {
+        const int globalRow = id(i);
+        if (isValidGlobalIndex(globalRow)) {
+            m_B(globalRow) += applyFact(v(i), fact);
         }
     }
 
@@ -435,41 +425,30 @@ int AmgXGenLinSOE::addB(const Vector &v, const ID &id, double fact)
 
 int AmgXGenLinSOE::setB(const Vector &v, double fact)
 {
-    // check for a quick return 
-    if (fact == 0.0)  {
-        m_B.Zero();
+    // Check for a quick return
+    if (fact == 0.0) {
+        zeroB();
         return 0;
     }
 
     const int size = m_B.Size();
-
-    if (v.Size() != size) {
-        opserr << "WARNING: AmgXGenLinSOE::setB() -";
-        opserr << " incompatible sizes " << size << " and " << v.Size() << endln;
+    if (size != v.Size()) {
+        opserr << "ERROR: AmgXGenLinSOE::setB: Vector size mismatch\n";
         return -1;
     }
 
-    if (fact == 1.0) { // do not need to multiply if fact == 1.0
-        for (int i = 0; i < size; i++) {
-            m_B[i] = v(i);
-        }
-    } else if (fact == -1.0) {
-        for (int i = 0; i < size; i++) {
-            m_B[i] = -v(i);
-        }
-    } else {
-        for (int i = 0; i < size; i++) {
-            m_B[i] = v(i) * fact;
-        }
+    // Set vector elements
+    for (int i = 0; i < size; ++i) {
+        m_B(i) = applyFact(v(i), fact);
     }
-    
+
     return 0;
 }
 
 void AmgXGenLinSOE::zeroA(void)
 {
-    m_AValuesBlock.assign(m_AValuesBlock.size(),0.0);
-
+    std::fill(m_AValuesBlock.begin(), m_AValuesBlock.end(), 0.0);
+    
     // Update matrix status
     if (m_matrixStatus == AmgXMatrixStatus::UNCHANGED) {
         m_matrixStatus = AmgXMatrixStatus::COEFFICIENTS_CHANGED;
@@ -478,14 +457,12 @@ void AmgXGenLinSOE::zeroA(void)
 
 void AmgXGenLinSOE::zeroB(void)
 {
-    m_B.Zero();
+    std::fill(m_BPadded.begin(), m_BPadded.end(), 0.0);
 }
 
 void AmgXGenLinSOE::setX(int loc, double value)
 {
-    const int size = m_X.Size();
-
-    if (loc < size && loc >= 0) {
+    if (isValidGlobalIndex(loc)) {
         m_X(loc) = value;
     }
 }
@@ -493,23 +470,25 @@ void AmgXGenLinSOE::setX(int loc, double value)
 void AmgXGenLinSOE::setX(const Vector &x)
 {
     const int size = m_X.Size();
-
-    if (x.Size() == size) {
-        m_X = x;
+    if (size != x.Size()) {
+        opserr << "ERROR: AmgXGenLinSOE::setX: Vector size mismatch\n";
+        return;
     }
+
+    m_X = x;
 }
 
-const Vector & AmgXGenLinSOE::getX(void)
+const Vector & AmgXGenLinSOE::getX(void) const
 {
     return m_X;
 }   
 
-const Vector & AmgXGenLinSOE::getB(void)
+const Vector & AmgXGenLinSOE::getB(void) const
 {
     return m_B;
 }
 
-double AmgXGenLinSOE::normRHS(void)
+double AmgXGenLinSOE::normRHS(void) const
 {
     return m_B.Norm();
 }
@@ -523,7 +502,7 @@ int AmgXGenLinSOE::setAmgXGenLinSolver(LinearSOESolver &newSolver)
         if (m_X.Size() != 0) {
             int solverOK = doubleSolver->setSize();
             if (solverOK < 0) {
-                opserr << "WARNING: AmgXGenLinSOE::setSolver :";
+                opserr << "ERROR: AmgXGenLinSOE::setAmgXGenLinSolver: ";
                 opserr << "the new solver could not setSize() - staying with old\n";
                 return -1;
             }
@@ -538,7 +517,7 @@ int AmgXGenLinSOE::setAmgXGenLinSolver(LinearSOESolver &newSolver)
         if (m_X.Size() != 0) {
             int solverOK = floatSolver->setSize();
             if (solverOK < 0) {
-                opserr << "WARNING: AmgXGenLinSOE::setSolver :";
+                opserr << "ERROR: AmgXGenLinSOE::setAmgXGenLinSolver: ";
                 opserr << "the new solver could not setSize() - staying with old\n";
                 return -1;
             }
@@ -547,7 +526,7 @@ int AmgXGenLinSOE::setAmgXGenLinSolver(LinearSOESolver &newSolver)
     }
     
     // If neither cast works, this is not an AmgXGenLinSolver
-    opserr << "WARNING: AmgXGenLinSOE::setAmgXGenLinSolver: Solver is not an AmgXGenLinSolver\n";
+    opserr << "ERROR: AmgXGenLinSOE::setAmgXGenLinSolver: Solver is not an AmgXGenLinSolver\n";
     return -1;
 }
 
@@ -562,7 +541,7 @@ int AmgXGenLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     const int startRow = m_X.Size() % m_BlockSize;
 
     if (startRow <= 0 || blockOffset < 0) {
-        opserr << "WARNING: AmgXGenLinSOE::fillPaddedDiagonals() - invalid block offset or start row\n";
+        opserr << "ERROR: AmgXGenLinSOE::fillPaddedDiagonals: Invalid block offset or start row\n";
         return -1;
     }
 
@@ -581,7 +560,7 @@ int AmgXGenLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
         }
 
         avgDiag /= static_cast<double>(startRow);
-        const double minDiag = 1e-3 * maxAbsDiag;
+        const double minDiag = MIN_DIAGONAL_VALUE_FACTOR * maxAbsDiag;
         // Add the average diagonal value to the user-supplied value
         repDiagValue += (avgDiag > minDiag) ? avgDiag : minDiag;
     }
@@ -612,7 +591,9 @@ int AmgXGenLinSOE::solve(void)
     // Alternatively, we could just fill out with ones in the diagonal, 
     // but that may cause numerical problems.
     if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
-        fillPaddedDiagonals();
+        if (fillPaddedDiagonals() != 0) {
+            opserr << "WARNING: AmgXGenLinSOE::solve: Failed to fill padded diagonals\n";
+        }
     }
 
     LinearSOESolver *the_Solver = this->getSolver();
@@ -624,6 +605,7 @@ int AmgXGenLinSOE::solve(void)
         }
         return solverOk;
     } else {
+        opserr << "ERROR: AmgXGenLinSOE::solve: No solver available\n";
         return -1;
     }
 }
@@ -631,13 +613,15 @@ int AmgXGenLinSOE::solve(void)
 int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
 {
     if (m_AValuesBlock.empty() || m_ARowPtrBlock.empty() || m_AColIdxBlock.empty()) {
-        opserr << "WARNING: AmgXGenLinSOE::saveSparseA() - m_AValuesBlock, m_ARowPtrBlock, or m_AColIdxBlock is empty\n";
+        opserr << "WARNING: AmgXGenLinSOE::saveSparseA: Matrix data is empty\n";
         return 0;
     }
 
     // Pad matrix before printing
     if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
-        fillPaddedDiagonals();
+        if (fillPaddedDiagonals() != 0) {
+            opserr << "WARNING: AmgXGenLinSOE::saveSparseA: Failed to fill padded diagonals\n";
+        }
     }
 
     const int numBlockRows = m_ARowPtrBlock.size() - 1;
@@ -650,26 +634,40 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
 
     // Write the sparse matrix entries
     int nnz_written = 0;
-    for (int blockRow = 0; blockRow < numBlockRows; blockRow++) {
-        int rowStart = m_ARowPtrBlock[blockRow];
-        int rowEnd = m_ARowPtrBlock[blockRow + 1];
-        for (int blockIdx = rowStart; blockIdx < rowEnd; blockIdx++) {
-            int blockCol = m_AColIdxBlock[blockIdx];
-            double* theBlock = m_AValuesBlock.data() + blockIdx * m_BlockSize * m_BlockSize;
-            for (int i = 0; i < m_BlockSize; i++) {
-                for (int j = 0; j < m_BlockSize; j++) {
-                    const int row = blockRow * m_BlockSize + i + baseIndex;
-                    const int col = blockCol * m_BlockSize + j + baseIndex;
-                    const double val = theBlock[i * m_BlockSize + j];
-                    output << row << " " << col << " " << val << "\n";
-                    nnz_written++;
+    if (m_BlockSize > 1) { // Block CSR format
+        for (int blockRow = 0; blockRow < numBlockRows; blockRow++) {
+            const int rowStart = m_ARowPtrBlock[blockRow];
+            const int rowEnd = m_ARowPtrBlock[blockRow + 1];
+            for (int blockIdx = rowStart; blockIdx < rowEnd; blockIdx++) {
+                const int blockCol = m_AColIdxBlock[blockIdx];
+                double* theBlock = m_AValuesBlock.data() + blockIdx * m_BlockSize * m_BlockSize;
+                for (int i = 0; i < m_BlockSize; i++) {
+                    for (int j = 0; j < m_BlockSize; j++) {
+                        const int row = blockRow * m_BlockSize + i + baseIndex;
+                        const int col = blockCol * m_BlockSize + j + baseIndex;
+                        const double val = theBlock[i * m_BlockSize + j];
+                        output << row << " " << col << " " << val << "\n";
+                        nnz_written++;
+                    }
                 }
+            }
+        }
+    } else { // Standard CSR format
+        for (int row = 0; row < size; row++) {
+            const int rowStart = m_ARowPtrBlock[row];
+            const int rowEnd = m_ARowPtrBlock[row + 1];
+            for (int idx = rowStart; idx < rowEnd; idx++) {
+                const int col = m_AColIdxBlock[idx];
+                const double val = m_AValuesBlock[idx];
+                output << row << " " << col << " " << val << "\n";
+                nnz_written++;
             }
         }
     }
 
     if (nnz_written != nnz) {
-        opserr << "WARNING: AmgXGenLinSOE::saveSparseA() - nnz_written != nnz\n";
+        opserr << "WARNING: AmgXGenLinSOE::saveSparseA: nnz_written (" << nnz_written 
+               << ") != nnz (" << nnz << ")\n";
         return -1;
     }
 
@@ -698,23 +696,22 @@ int AmgXGenLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker
  * https://github.com/scipy/scipy/blob/0f1fd4a7268b813fa2b844ca6038e4dfdf90084a/scipy/sparse/sparsetools/csr.h#L205-L254
  */
 
-// Estimate the number of blocks in the graph.
-// Assumes the system of equations forms a square sparse matrix.
+// Estimate the optimal block size based on sparsity pattern efficiency
 int AmgXGenLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency)
 {
     const int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "WARNING: size of soe < 0 -- AmgXGenLinSOE::estimateBlockSize" << endln;
+        opserr << "ERROR: AmgXGenLinSOE::estimateBlockSize: size of soe < 0\n";
         return -1;
     }
 
     if (nnz == 0) {
-        return 1;
+        return DEFAULT_BLOCK_SIZE;
     }
 
     if (efficiency <= 0.0 || efficiency >= 1.0) {
-        opserr << "WARNING: efficiency must satisfy 0.0 < efficiency < 1.0 -- AmgXGenLinSOE::estimateBlockSize" << endln;
-        return -1;
+        opserr << "ERROR: AmgXGenLinSOE::estimateBlockSize: efficiency must satisfy 0.0 < efficiency < 1.0\n";
+        return DEFAULT_BLOCK_SIZE;
     }
 
     double e4 = 0.0, e3 = 0.0, e2 = 0.0;
@@ -722,33 +719,40 @@ int AmgXGenLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency
     // Try block size 4
     if (m_paddingEnabled || size % 4 == 0) {
         int nb4 = countBlocks(theGraph, 4);
-        if (nb4 > 0)
+        if (nb4 > 0) {
             e4 = nnz / static_cast<double>(16 * nb4);
-        if (e4 > efficiency)
-            return 4;
+            if (e4 > efficiency) {
+                return 4;
+            }
+        }
     }
 
     // Try block size 3
     if (m_paddingEnabled || size % 3 == 0) {
         int nb3 = countBlocks(theGraph, 3);
-        if (nb3 > 0)
+        if (nb3 > 0) {
             e3 = nnz / static_cast<double>(9 * nb3);
-        if (e3 > efficiency)
-            return 3;
+            if (e3 > efficiency) {
+                return 3;
+            }
+        }
     }
 
     // Try block size 2
     if (m_paddingEnabled || size % 2 == 0) {
         int nb2 = countBlocks(theGraph, 2);
-        if (nb2 > 0)
+        if (nb2 > 0) {
             e2 = nnz / static_cast<double>(4 * nb2);
-        if (e2 > efficiency)
-            return 2;
+            if (e2 > efficiency) {
+                return 2;
+            }
+        }
     }
 
     // Fallback: block size 1
-    return 1;
+    return DEFAULT_BLOCK_SIZE;
 }
+
 // Count the number of square blocks in the graph.
 // Assumes the system of equations forms a square sparse matrix 
 // and the graph is undirected.
@@ -756,17 +760,17 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
 {
     int size = theGraph.getNumVertex();
     if (size < 0) {
-        opserr << "WARNING: size of soe < 0 -- AmgXGenLinSOE::countBlocks" << endln;
+        opserr << "ERROR: AmgXGenLinSOE::countBlocks: size of soe < 0\n";
         return -1;
     }
 
     if (blockSize < 1) {
-        opserr << "WARNING: blockSize must be >= 1 -- AmgXGenLinSOE::countBlocks" << endln;
+        opserr << "ERROR: AmgXGenLinSOE::countBlocks: blockSize must be >= 1\n";
         return -1;
     }
 
-    if (size % blockSize != 0 && m_paddingEnabled == false) {
-        opserr << "WARNING: size of soe must be divisible by blockSize -- AmgXGenLinSOE::countBlocks" << endln;
+    if (size % blockSize != 0 && !m_paddingEnabled) {
+        opserr << "ERROR: AmgXGenLinSOE::countBlocks: size of soe must be divisible by blockSize\n";
         return -1;
     }
 
@@ -780,9 +784,7 @@ int AmgXGenLinSOE::countBlocks(Graph &theGraph, int blockSize)
         const int blockRow = i / blockSize;
         Vertex* theVertex = theGraph.getVertexPtr(i);
         if (theVertex == nullptr) {
-            opserr << "WARNING: AmgXGenLinSOE::setSize :"
-                << " vertex " << i << " not in graph! - size set to 0\n";
-            size = 0;
+            opserr << "ERROR: AmgXGenLinSOE::countBlocks: vertex " << i << " not in graph!\n";
             return -1;
         }
         const ID& adjacency = theVertex->getAdjacency(); // col indices

@@ -40,13 +40,21 @@
 class AmgXGenLinSOE : public LinearSOE
 {
     public:
+        // Constants for block size limits and efficiency thresholds
+        static constexpr int MAX_BLOCK_SIZE = 32;
+        static constexpr int DEFAULT_BLOCK_SIZE = 1;
+        static constexpr double DEFAULT_EFFICIENCY_THRESHOLD = 0.7;
+        static constexpr double MIN_DIAGONAL_VALUE_FACTOR = 1e-3;
+
         AmgXGenLinSOE(LinearSOESolver &theSolver, 
-                      int blockSize = 1, bool paddingEnabled = true,
+                      int blockSize = DEFAULT_BLOCK_SIZE, 
+                      bool paddingEnabled = true,
                       bool verbose = false);
         AmgXGenLinSOE();
 
         ~AmgXGenLinSOE();
         
+        // Core LinearSOE interface methods
         int getNumEqn(void) const;
         int setSize(Graph &theGraph);
         int addA(const Matrix &, const ID &, double fact = 1.0);
@@ -56,9 +64,9 @@ class AmgXGenLinSOE : public LinearSOE
         void zeroA(void);
         void zeroB(void);
 
-        const Vector &getX(void);
-        const Vector &getB(void);
-        double normRHS(void);   
+        const Vector &getX(void) const;
+        const Vector &getB(void) const;
+        double normRHS(void) const;   
 
         void setX(int loc, double value);
         void setX(const Vector &x);
@@ -70,7 +78,7 @@ class AmgXGenLinSOE : public LinearSOE
         int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);  
 
         // Track changes in the matrix
-        enum AmgXMatrixStatus {
+        enum class AmgXMatrixStatus {
             UNCHANGED, // Matrix is the same as the last solve
             COEFFICIENTS_CHANGED, // Only the coefficients of the matrix have changed
             STRUCTURE_CHANGED // Both the size and coefficients of the matrix have changed
@@ -100,10 +108,21 @@ class AmgXGenLinSOE : public LinearSOE
         // Whether to print verbose output
         bool m_verbose;
 
-        // Block CSR format conversion
-        int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = 0.7);
-        int countBlocks(Graph &theGraph, int block_size);
+        // Block CSR format conversion and utility methods
+        int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = DEFAULT_EFFICIENCY_THRESHOLD);
+        int countBlocks(Graph &theGraph, int blockSize);
         int fillPaddedDiagonals(double value = 0.0, bool autoCompute = true);
+        
+        // Helper methods for assembly
+        int addAMatrixElement(int globalRow, int globalCol, double value);
+        int addAMatrixElementBlock(int globalRow, int globalCol, double value);
+        int addAMatrixElementStandard(int globalRow, int globalCol, double value);
+        inline double applyFact(double input, double fact) {
+            return (fact == 1.0) ? input : (fact == -1.0) ? -input : fact * input;
+        }        
+        // Validation methods
+        bool isValidBlockSize(int blockSize) const;
+        bool isValidGlobalIndex(int index) const;
 };
 
 #endif
