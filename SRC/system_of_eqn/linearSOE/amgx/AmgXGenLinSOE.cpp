@@ -183,7 +183,6 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             theVertex = theGraph.getVertexPtr(row);
             if (theVertex == nullptr) {
                 opserr << "ERROR: AmgXGenLinSOE::setSize: vertex " << row << " not in graph!\n";
-                size = 0;
                 return -1;
             }
 
@@ -236,7 +235,6 @@ int AmgXGenLinSOE::setSize(Graph &theGraph)
             theVertex = theGraph.getVertexPtr(row);
             if (theVertex == nullptr) {
                 opserr << "ERROR: AmgXGenLinSOE::setSize: vertex " << row << " not in graph!\n";
-                size = 0;
                 return -1;
             }
             
@@ -350,7 +348,7 @@ int AmgXGenLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, doubl
         }
     }
     
-    opserr << "WARNING: AmgXGenLinSOE::addAMatrixElementStandard: Could not find element for row " 
+    opserr << "ERROR: AmgXGenLinSOE::addAMatrixElementStandard: Could not find element for row " 
            << globalRow << ", col " << globalCol << endln;
     return -1;
 }
@@ -383,8 +381,9 @@ int AmgXGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
             
             double value = applyFact(m(i, j), fact);
             if (addAMatrixElement(globalRow, globalCol, value) != 0) {
-                opserr << "WARNING: AmgXGenLinSOE::addA: Failed to add element at (" 
+                opserr << "ERROR: AmgXGenLinSOE::addA: Failed to add element at (" 
                        << globalRow << ", " << globalCol << ")\n";
+                return -1;
             }
         }
     }
@@ -554,7 +553,7 @@ int AmgXGenLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
         for (int localRow = 0; localRow < startRow; ++localRow) {
             const int idx = blockOffset + localRow * m_BlockSize + localRow;
             const double diag = m_AValuesBlock[idx];
-            const double absDiag = (diag >= 0.0) ? diag : -diag;
+            const double absDiag = std::abs(diag);
             avgDiag += absDiag;
             if (absDiag > maxAbsDiag) maxAbsDiag = absDiag;
         }
@@ -592,7 +591,8 @@ int AmgXGenLinSOE::solve(void)
     // but that may cause numerical problems.
     if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
         if (fillPaddedDiagonals() != 0) {
-            opserr << "WARNING: AmgXGenLinSOE::solve: Failed to fill padded diagonals\n";
+            opserr << "ERROR: AmgXGenLinSOE::solve: Failed to fill padded diagonals\n";
+            return -1;
         }
     }
 
@@ -620,7 +620,8 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
     // Pad matrix before printing
     if (m_matrixStatus != AmgXMatrixStatus::UNCHANGED && m_paddingEnabled) {
         if (fillPaddedDiagonals() != 0) {
-            opserr << "WARNING: AmgXGenLinSOE::saveSparseA: Failed to fill padded diagonals\n";
+            opserr << "ERROR: AmgXGenLinSOE::saveSparseA: Failed to fill padded diagonals\n";
+            return -1;
         }
     }
 
@@ -685,13 +686,6 @@ int AmgXGenLinSOE::recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker
 }
 
 /* Utility functions for block size estimation and counting.
- * These functions help determine the optimal block size for the block CSR format
- * by analyzing the sparsity pattern of the system of equations.
- * The estimation is based on the efficiency of different block sizes, where
- * efficiency is defined as the ratio of nonzeros to the total number of elements
- * in the blocks. The algorithm tries to find the largest block size that maintains
- * a good efficiency (i.e., not too many zeros within blocks).
- *
  * This algorithm is adapted from the implementation in SciPy's `sparsetools`:
  * https://github.com/scipy/scipy/blob/0f1fd4a7268b813fa2b844ca6038e4dfdf90084a/scipy/sparse/sparsetools/csr.h#L205-L254
  */
@@ -710,46 +704,24 @@ int AmgXGenLinSOE::estimateBlockSize(Graph &theGraph, int nnz, double efficiency
     }
 
     if (efficiency <= 0.0 || efficiency >= 1.0) {
-        opserr << "ERROR: AmgXGenLinSOE::estimateBlockSize: efficiency must satisfy 0.0 < efficiency < 1.0\n";
+        opserr << "WARNING: AmgXGenLinSOE::estimateBlockSize: efficiency must satisfy 0.0 < efficiency < 1.0\n";
         return DEFAULT_BLOCK_SIZE;
     }
 
-    double e4 = 0.0, e3 = 0.0, e2 = 0.0;
+    int listOfBlockSizes[] = {4, 3, 2};
 
-    // Try block size 4
-    if (m_paddingEnabled || size % 4 == 0) {
-        int nb4 = countBlocks(theGraph, 4);
-        if (nb4 > 0) {
-            e4 = nnz / static_cast<double>(16 * nb4);
-            if (e4 > efficiency) {
-                return 4;
+    for (int blockSize : listOfBlockSizes) {
+        if (m_paddingEnabled || size % blockSize == 0) {
+            int nb = countBlocks(theGraph, blockSize);
+            if (nb > 0) {
+                double e = nnz / static_cast<double>(blockSize * blockSize * nb);
+                if (e > efficiency) {
+                    return blockSize;
+                }
             }
         }
     }
 
-    // Try block size 3
-    if (m_paddingEnabled || size % 3 == 0) {
-        int nb3 = countBlocks(theGraph, 3);
-        if (nb3 > 0) {
-            e3 = nnz / static_cast<double>(9 * nb3);
-            if (e3 > efficiency) {
-                return 3;
-            }
-        }
-    }
-
-    // Try block size 2
-    if (m_paddingEnabled || size % 2 == 0) {
-        int nb2 = countBlocks(theGraph, 2);
-        if (nb2 > 0) {
-            e2 = nnz / static_cast<double>(4 * nb2);
-            if (e2 > efficiency) {
-                return 2;
-            }
-        }
-    }
-
-    // Fallback: block size 1
     return DEFAULT_BLOCK_SIZE;
 }
 
