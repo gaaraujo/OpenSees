@@ -643,8 +643,8 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
                 const int blockCol = m_AColIdxBlock[blockIdx];
                 double* theBlock = m_AValuesBlock.data() + blockIdx * m_BlockSize * m_BlockSize;
                 for (int i = 0; i < m_BlockSize; i++) {
+                    const int row = blockRow * m_BlockSize + i + baseIndex;
                     for (int j = 0; j < m_BlockSize; j++) {
-                        const int row = blockRow * m_BlockSize + i + baseIndex;
                         const int col = blockCol * m_BlockSize + j + baseIndex;
                         const double val = theBlock[i * m_BlockSize + j];
                         output << row << " " << col << " " << val << "\n";
@@ -654,11 +654,11 @@ int AmgXGenLinSOE::saveSparseA(OPS_Stream& output, int baseIndex)
             }
         }
     } else { // Standard CSR format
-        for (int row = 0; row < size; row++) {
-            const int rowStart = m_ARowPtrBlock[row];
-            const int rowEnd = m_ARowPtrBlock[row + 1];
+        for (int i = 0, row = baseIndex; i < size; i++, row++) {
+            const int rowStart = m_ARowPtrBlock[i];
+            const int rowEnd = m_ARowPtrBlock[i + 1];
             for (int idx = rowStart; idx < rowEnd; idx++) {
-                const int col = m_AColIdxBlock[idx];
+                const int col = m_AColIdxBlock[idx] + baseIndex;
                 const double val = m_AValuesBlock[idx];
                 output << row << " " << col << " " << val << "\n";
                 nnz_written++;
