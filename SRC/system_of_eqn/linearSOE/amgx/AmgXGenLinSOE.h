@@ -125,4 +125,17 @@ class AmgXGenLinSOE : public LinearSOE
         bool isValidGlobalIndex(int index) const;
 };
 
+inline OPS_Stream& operator<<(OPS_Stream& os, AmgXGenLinSOE::AmgXMatrixStatus& status) {
+    switch (status) {
+        case AmgXGenLinSOE::AmgXMatrixStatus::UNCHANGED:
+            return os << "UNCHANGED";
+        case AmgXGenLinSOE::AmgXMatrixStatus::COEFFICIENTS_CHANGED:
+            return os << "COEFFICIENTS_CHANGED";
+        case AmgXGenLinSOE::AmgXMatrixStatus::STRUCTURE_CHANGED:
+            return os << "STRUCTURE_CHANGED";
+        default:
+            return os << "UNKNOWN";
+    }
+}
+
 #endif
