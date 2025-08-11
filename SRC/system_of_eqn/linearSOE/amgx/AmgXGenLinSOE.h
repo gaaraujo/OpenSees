@@ -64,9 +64,9 @@ class AmgXGenLinSOE : public LinearSOE
         void zeroA(void);
         void zeroB(void);
 
-        const Vector &getX(void) const;
-        const Vector &getB(void) const;
-        double normRHS(void) const;   
+        const Vector &getX(void);
+        const Vector &getB(void);
+        double normRHS(void);   
 
         void setX(int loc, double value);
         void setX(const Vector &x);

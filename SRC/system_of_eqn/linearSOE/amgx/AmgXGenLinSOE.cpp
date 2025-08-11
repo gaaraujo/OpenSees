@@ -477,17 +477,17 @@ void AmgXGenLinSOE::setX(const Vector &x)
     m_X = x;
 }
 
-const Vector & AmgXGenLinSOE::getX(void) const
+const Vector & AmgXGenLinSOE::getX(void)
 {
     return m_X;
 }   
 
-const Vector & AmgXGenLinSOE::getB(void) const
+const Vector & AmgXGenLinSOE::getB(void)
 {
     return m_B;
 }
 
-double AmgXGenLinSOE::normRHS(void) const
+double AmgXGenLinSOE::normRHS(void)
 {
     return m_B.Norm();
 }
