@@ -125,7 +125,7 @@ class AmgXGenLinSOE : public LinearSOE
         bool isValidGlobalIndex(int index) const;
 };
 
-inline OPS_Stream& operator<<(OPS_Stream& os, AmgXGenLinSOE::AmgXMatrixStatus& status) {
+inline OPS_Stream& operator<<(OPS_Stream& os, AmgXGenLinSOE::AmgXMatrixStatus status) {
     switch (status) {
         case AmgXGenLinSOE::AmgXMatrixStatus::UNCHANGED:
             return os << "UNCHANGED";
