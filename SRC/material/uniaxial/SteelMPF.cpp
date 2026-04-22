@@ -105,11 +105,18 @@ inline double checkLess(int tag, const char *paramName, double v, double b)
 	return c;
 }
 
-// fabs yield strengths; strict / bounded checks on stiffness and evolution parameters.
+// All full-constructor material scalars (same order as ctor) so checks live in one place;
+// currently only modifies where noted; bp0, bn0, cbp, cbn are unchecked.
 inline void checkSteelMPFMaterialInputs(int tag, double &sigyieldp, double &sigyieldn,
-	double &E0, double &R0, double &aa1, double &a2, double &a3, double &a4, double &a5, double &a6,
+	double &E0, double &bp0, double &bn0, double &R0,
+	double &aa1, double &a2, double &a3, double &a4, double &a5, double &a6,
 	double &cbp, double &cbn, double &deltap, double &deltan)
 {
+	(void)bp0;
+	(void)bn0;
+	(void)cbp;
+	(void)cbn;
+
 	sigyieldp = fabs(sigyieldp);
 	sigyieldn = fabs(sigyieldn);
 	E0 = checkGreater(tag, "E0", E0, 0.0);
@@ -122,10 +129,6 @@ inline void checkSteelMPFMaterialInputs(int tag, double &sigyieldp, double &sigy
 	a5 = checkGreaterOrEqual(tag, "a5", a5, 0.0);
 	a6 = checkGreaterOrEqual(tag, "a6", a6, 0.0);
 
-	cbp = checkGreaterOrEqual(tag, "cbp", cbp, 0.0);
-	cbp = checkLessOrEqual(tag, "cbp", cbp, 1.0);
-	cbn = checkGreaterOrEqual(tag, "cbn", cbn, 0.0);
-	cbn = checkLessOrEqual(tag, "cbn", cbn, 1.0);
 	deltap = checkGreaterOrEqual(tag, "deltap", deltap, 0.0);
 	deltan = checkGreaterOrEqual(tag, "deltan", deltan, 0.0);
 }
@@ -194,7 +197,7 @@ UniaxialMaterial(tag, MAT_TAG_SteelMPF),
 	cbp(Cbp), cbn(Cbn), deltap(Deltap), deltan(Deltan)
 
 {
-	checkSteelMPFMaterialInputs(tag, sigyieldp, sigyieldn, E0, R0, aa1, a2, a3, a4, a5, a6,
+	checkSteelMPFMaterialInputs(tag, sigyieldp, sigyieldn, E0, bp0, bn0, R0, aa1, a2, a3, a4, a5, a6,
 		cbp, cbn, deltap, deltan);
 
 	// Sets all history and state variables to initial values
@@ -1206,7 +1209,7 @@ int SteelMPF::recvSelf (int commitTag, Channel& theChannel, FEM_ObjectBroker& th
 			deltan = 0.0;
 		}
 
-		checkSteelMPFMaterialInputs(this->getTag(), sigyieldp, sigyieldn, E0, R0, aa1, a2, a3, a4, a5, a6,
+		checkSteelMPFMaterialInputs(this->getTag(), sigyieldp, sigyieldn, E0, bp0, bn0, R0, aa1, a2, a3, a4, a5, a6,
 			cbp, cbn, deltap, deltan);
 
 		a1 = aa1 * R0;
