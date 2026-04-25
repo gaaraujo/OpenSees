@@ -34,15 +34,13 @@
 class SteelMPF : public UniaxialMaterial
 {
 public:
-	// Typical constructor (delegates to the full constructor with default a3–a6 and cbp/cbn/deltap/deltan)
+	// Typical constructor
 	SteelMPF(int tag, double sigyieldp, double sigyieldn,
-		double E0, double bp0, double bn0, double R0, double a1, double a2);
+		double E0, double bp, double bn, double R0, double a1, double a2);
 
-	// Constructor with strain hardening parameters a3–a6 and optional
-	// evolution of reference bp0, bn0 via isotropic measures (see SteelMPF.cpp).
+	// Constructor with strain hardening parameters a3 and a4
 	SteelMPF(int tag, double sigyieldp, double sigyieldn,
-		double E0, double bp0, double bn0, double R0, double a1, double a2, double a3, double a4, double a5, double a6,
-		double cbp = 1.0, double cbn = 1.0, double deltap = 0.0, double deltan = 0.0);
+		double E0, double bp, double bn, double R0, double a1, double a2, double a3, double a4, double a5, double a6);
 
 	// Blank constructor
 	SteelMPF();
@@ -81,8 +79,8 @@ private:
 	double eyieldp;		//(calculated in constructor)
 	double eyieldn;		//(calculated in constructor)
 	double E0;			// Initial stiffness (Young's Modulus)
-	double bp0;			// Initial strain hardening ratio in tension
-	double bn0;			// Initial strain hardening ratio in compression
+	double bp;			// Strain hardening ratio in tension
+	double bn;			// Strain hardening ratio in compression
 	double R0;			// Initial value of the curvature parameter R 
 	double a1;			// Curvature degradation parameter 
 	double aa1;			// Curvature degradation parameter 
@@ -91,10 +89,6 @@ private:
 	double a4;			// Isotropic hardening parameter 
 	double a5;			// Isotropic hardening parameter 
 	double a6;			// Isotropic hardening parameter 
-	double cbp;			// Weight for constant vs exponential decay of bp from bp0
-	double cbn;			// Weight for constant vs exponential decay of bn from bn0
-	double deltap;		// Exponential decay rate for bp
-	double deltan;		// Exponential decay rate for bn
 
 	// TRIAL State Variables
 	double def;
