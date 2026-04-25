@@ -69,17 +69,16 @@ inline double mpScaleDerivative(double est, double R)
 }
 
 // MP stress/tangent with an ultimate-stress cap σ_u (signed; positive for tension, negative for compression).
-// εu is the breakpoint where the b-asymptote crosses σ_u; Rult bounded above by current R.
+// εu is the breakpoint where the b-asymptote crosses σ_u; ultimate-branch curvature uses fixed Rult0 (not R).
 inline void mpStressTangentWithUlt(double e, double er, double sigr,
 	double e0, double sig0, double sigult, double E0,
 	double R, double Rult0, double b, double *sig, double *Et)
 {
 	const double eult = b == 0.0 ? e0 : e0 + (sigult - sig0) / (b * E0);
-	const double Rult = Rult0 > R ? R : Rult0;
 	const double est = (e - er) / (e0 - er);
 	const double estult = (e - er) / (eult - er);
 	const double scale = mpScale(est, R);
-	const double scaleUlt = mpScale(estult, Rult);
+	const double scaleUlt = mpScale(estult, Rult0);
 
 	*sig = sigr + (sig0 - sigr) * est * (b * scaleUlt + (1.0 - b) * scale);
 
@@ -87,7 +86,7 @@ inline void mpStressTangentWithUlt(double e, double er, double sigr,
 		const double dEst = 1.0 / (e0 - er);
 		const double dEstUlt = 1.0 / (eult - er);
 		const double dScale = mpScaleDerivative(est, R);
-		const double dScaleUlt = mpScaleDerivative(estult, Rult);
+		const double dScaleUlt = mpScaleDerivative(estult, Rult0);
 		const double dSigst = b * (dEst * scaleUlt + est * dScaleUlt * dEstUlt)
 			+ (1.0 - b) * dEst * (scale + est * dScale);
 		*Et = (sig0 - sigr) * dSigst;
