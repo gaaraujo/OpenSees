@@ -33,27 +33,122 @@
 #include <Information.h>
 #include <math.h>
 #include <float.h>
-
+#include <string.h>
 #include <elementAPI.h>
 #define OPS_Export 
 
 namespace {
 
-// Menegotto–Pinto along strain-stress chord: est = ε* (normalized strain).
-// *sigst = σ* (required, non-null). If tangent != nullptr, *tangent = dσ*/dε*; Et = chordSlope * etInner.
-inline void mpStressTangent(double est, double R, double b, double *sigst,
-	double *tangent = nullptr)
+// Menegotto-Pinto along strain-stress chord.
+inline void mpStressTangent(double e, double er, double sigr,
+	double e0, double sig0, double R, double b, double *sig, double *Et)
 {
+	const double est = (e - er) / (e0 - er);
 	const double eR = pow(est, R);
 	const double onePluseR = 1.0 + eR;
 	const double phi = pow(onePluseR, 1.0 / R);
 	const double c = (1.0 - b) / phi;
-	*sigst = b * est + c * est;
-	if (tangent != nullptr)
-		*tangent = b + c * (1.0 - eR / onePluseR);
+	*sig = sigr + (sig0 - sigr) * (b * est + c * est);
+	if (Et != nullptr)
+		*Et = ((sig0 - sigr) / (e0 - er)) * (b + c * (1.0 - eR / onePluseR));
+}
+
+// Φ(ε*, R) = (1 + ε*^R)^(-1/R). Assumes ε* >= 0.
+inline double mpScale(double est, double R)
+{
+	return pow(1.0 + pow(est, R), -1.0 / R);
+}
+
+// dΦ/dε* at ε* >= 0; equals 0 at ε*=0 to avoid 0^(R-1) blow-up for R<1.
+inline double mpScaleDerivative(double est, double R)
+{
+	if (est == 0.0)
+		return 0.0;
+	const double onePlus = 1.0 + pow(est, R);
+	return -pow(est, R - 1.0) * pow(onePlus, -1.0 / R - 1.0);
+}
+
+// MP stress/tangent with an ultimate-stress cap σ_u (signed; positive for tension, negative for compression).
+// εu is the breakpoint where the b-asymptote crosses σ_u; Rult bounded above by current R.
+inline void mpStressTangentWithUlt(double e, double er, double sigr,
+	double e0, double sig0, double sigult, double E0,
+	double R, double Rult0, double b, double *sig, double *Et)
+{
+	const double eult = b == 0.0 ? e0 : e0 + (sigult - sig0) / (b * E0);
+	const double Rult = Rult0 > R ? R : Rult0;
+	const double est = (e - er) / (e0 - er);
+	const double estult = (e - er) / (eult - er);
+	const double scale = mpScale(est, R);
+	const double scaleUlt = mpScale(estult, Rult);
+
+	*sig = sigr + (sig0 - sigr) * est * (b * scaleUlt + (1.0 - b) * scale);
+
+	if (Et != nullptr) {
+		const double dEst = 1.0 / (e0 - er);
+		const double dEstUlt = 1.0 / (eult - er);
+		const double dScale = mpScaleDerivative(est, R);
+		const double dScaleUlt = mpScaleDerivative(estult, Rult);
+		const double dSigst = b * (dEst * scaleUlt + est * dScaleUlt * dEstUlt)
+			+ (1.0 - b) * dEst * (scale + est * dScale);
+		*Et = (sig0 - sigr) * dSigst;
+	}
+}
+
+inline double checkGreaterThan(int tag, const char *name, double value, double limit)
+{
+	if (value > limit)
+		return value;
+	const double smallest = nextafter(limit, DBL_MAX);
+	opserr << "WARNING SteelMPF tag " << tag << " - " << name
+		<< " (" << value << ") must be > " << limit
+		<< "; setting " << name << " = " << smallest << endln;
+	return smallest;
+}
+
+inline double checkLowerThan(int tag, const char *name, double value, double limit)
+{
+	if (value < limit)
+		return value;
+	const double largest = nextafter(limit, -DBL_MAX);
+	opserr << "WARNING SteelMPF tag " << tag << " - " << name
+		<< " (" << value << ") must be < " << limit
+		<< "; setting " << name << " = " << largest << endln;
+	return largest;
+}
+
+inline double checkGreaterOrEqual(int tag, const char *name, double value, double limit)
+{
+	if (value >= limit)
+		return value;
+	opserr << "WARNING SteelMPF tag " << tag << " - " << name
+		<< " (" << value << ") must be >= " << limit
+		<< "; setting " << name << " = " << limit << endln;
+	return limit;
+}
+
+inline double checkLowerOrEqual(int tag, const char *name, double value, double limit)
+{
+	if (value <= limit)
+		return value;
+	opserr << "WARNING SteelMPF tag " << tag << " - " << name
+		<< " (" << value << ") must be <= " << limit
+		<< "; setting " << name << " = " << limit << endln;
+	return limit;
 }
 
 } // namespace
+
+void SteelMPF::evalMpStressTangent(double e, double er, double sigr,
+	double e0, double sig0, double sigult, double R, double b,
+	double &sig, double &Et) const
+{
+	if (hasSigUlt) {
+		mpStressTangentWithUlt(e, er, sigr, e0, sig0, sigult, E0, R, Rult0, b, &sig, &Et);
+		return;
+	}
+
+	mpStressTangent(e, er, sigr, e0, sig0, R, b, &sig, &Et);
+}
 
 // Read input parameters and build the material
 OPS_Export void *OPS_SteelMPF(void)
@@ -61,20 +156,56 @@ OPS_Export void *OPS_SteelMPF(void)
 	// Pointer to a uniaxial material that will be returned                       
 	UniaxialMaterial *theMaterial = 0;
 
-	int numArgs = OPS_GetNumRemainingInputArgs();
+	const int totalNumArgs = OPS_GetNumRemainingInputArgs();
 
-	// Parse the script for material parameters
-	if (numArgs != 9 && numArgs != 13) {
-		opserr << "Incorrect # args, Want: uniaxialMaterial SteelMPF tag? sigyieldp? sigyieldn? E0? bp? bn? R0? cR1? cR2? <a1? a2? a3? a4?>";
+	if (totalNumArgs < 6) {
+		opserr << "Incorrect # args, Want: uniaxialMaterial SteelMPF tag? sigyieldp? sigyieldn? "
+			<< "E0? bp? bn? <R0? cR1? cR2? <a1? a2? a3? a4?>> <-ult sigultp? sigultn? Rult0?>" << endln;
+		return 0;
+	}
+
+	// Scan trailing args for the optional -ult flag, which must be the last option.
+	bool hasUlt = false;
+	double ultData[3] = {0.0, 0.0, 0.0};
+	int numUltArgs = 0;
+	for (int scanned = 0; scanned < totalNumArgs; ++scanned) {
+		const char *opt = OPS_GetString();
+		if (opt != nullptr && strcmp(opt, "-ult") == 0) {
+			if (OPS_GetNumRemainingInputArgs() != 3) {
+				opserr << "WARNING SteelMPF -ult must be the last option, "
+					<< "followed by sigultp? sigultn? Rult0?" << endln;
+				return 0;
+			}
+			int n = 3;
+			if (OPS_GetDoubleInput(&n, ultData) != 0) {
+				opserr << "WARNING SteelMPF invalid -ult parameters" << endln;
+				return 0;
+			}
+			hasUlt = true;
+			numUltArgs = 4;	// flag + 3 doubles
+			break;
+		}
+	}
+
+	OPS_ResetCurrentInputArg(-totalNumArgs);
+
+	const int numMPFArgs = totalNumArgs - numUltArgs;
+	if (numMPFArgs != 6 && numMPFArgs != 9 && numMPFArgs != 13) {
+		opserr << "Incorrect # mandatory args (" << numMPFArgs << "), Want: "
+			<< "uniaxialMaterial SteelMPF tag? sigyieldp? sigyieldn? E0? bp? bn? "
+			<< "<R0? cR1? cR2? <a1? a2? a3? a4?>> <-ult sigultp? sigultn? Rult0?>" << endln;
 		return 0;
 	}
 
 	int iData[1];
 	double dData[12];
-	dData[8] = 0.0;		// set a3 to constructor default
-	dData[9] = 1.0;		// set a4 to constructor default
-	dData[10] = 0.0;	// set a5 to constructor default
-	dData[11] = 1.0;    // set a6 to constructor default
+	dData[5] = 20.0;	// R0 default
+	dData[6] = 0.915;	// cR1 default
+	dData[7] = 0.15;	// cR2 default
+	dData[8] = 0.0;		// a3 default
+	dData[9] = 1.0;		// a4 default
+	dData[10] = 0.0;	// a5 default
+	dData[11] = 1.0;	// a6 default
 
 	int numData = 1;
 	if (OPS_GetIntInput(&numData, iData) != 0) {
@@ -82,131 +213,56 @@ OPS_Export void *OPS_SteelMPF(void)
 		return 0;
 	}
 
-	numData = numArgs-1;
+	numData = numMPFArgs - 1;
 	if (OPS_GetDoubleInput(&numData, dData) != 0) {
 		opserr << "Invalid data for uniaxialMaterial SteelMPF " << dData[0] << endln;
 		return 0;
 	}
 
-	theMaterial = new SteelMPF(iData[0], dData[0], dData[1], dData[2], dData[3], dData[4], 
-		dData[5], dData[6], dData[7], dData[8], dData[9], dData[10], dData[11]);
+	SteelMPF::UltParams ult{ultData[0], ultData[1], ultData[2]};
+	theMaterial = new SteelMPF(iData[0], dData[0], dData[1],
+		dData[2], dData[3], dData[4], dData[5], dData[6], dData[7],
+		dData[8], dData[9], dData[10], dData[11],
+		hasUlt ? &ult : nullptr);
 
 	return theMaterial;
 }
 
 // Default Constructor
 SteelMPF::SteelMPF
-	(int tag, double FYp, double FYn, double E, double Bp, double Bn, double Rr, double A1, double A2):
-UniaxialMaterial(tag,MAT_TAG_SteelMPF),
-	sigyieldp(FYp), sigyieldn(FYn), E0(E), bp(Bp), bn(Bn), R0(Rr), aa1(A1), a2(A2), 
-	a3(0.0), a4(1.0), a5(0.0), a6(1.0) // default values for strain hardening
-
+	(int tag, double FYp, double FYn, double E, double Bp, double Bn, double Rr, double A1, double A2)
+	: SteelMPF(tag, FYp, FYn, E, Bp, Bn, Rr, A1, A2, 0.0, 1.0, 0.0, 1.0)
 {
-	// Sets all history and state variables to initial values
-
-	// TRIAL History variables
-	inc = 0;
-
-	Rptwoprev = 0.0;
-	Rntwoprev = 0.0;
-
-	outp = 0;
-	outn = 0;
-
-	erp = 0.0;
-	sigrp = 0.0;
-
-	ern = 0.0;
-	sigrn = 0.0;
-
-	erpmaxmax = 0.0;
-	ernmaxmax = 0.0;
-
-	e0p = 0.0;
-	sig0p = 0.0;
-
-	e0n = 0.0;
-	sig0n = 0.0;
-
-	erntwoprev = 0.0;
-	sigrntwoprev = 0.0;
-	e0ntwoprev = 0.0;
-	sig0ntwoprev = 0.0;
-
-	erptwoprev = 0.0;
-	sigrptwoprev = 0.0;
-	e0ptwoprev = 0.0;
-	sig0ptwoprev = 0.0;
-
-	Rp = 0.0;
-	Rn = 0.0;
-
-	nloop = 0;
-
-	// CONVERGED History variables
-	incold = 0;
-
-	Rptwoprevold = 0.0;
-	Rntwoprevold = 0.0;
-
-	outpold = 0;
-	outnold = 0;
-
-	erpold = 0.0;
-	sigrpold = 0.0;
-
-	ernold = 0.0;
-	sigrnold = 0.0;
-
-	erpmaxmaxold = 0.0;
-	ernmaxmaxold = 0.0;
-
-	e0pold = 0.0;
-	sig0pold = 0.0;
-
-	e0nold = 0.0;
-	sig0nold = 0.0;
-
-	erntwoprevold = 0.0;
-	sigrntwoprevold = 0.0;
-	e0ntwoprevold = 0.0;
-	sig0ntwoprevold = 0.0;
-
-	erptwoprevold = 0.0;
-	sigrptwoprevold = 0.0;
-	e0ptwoprevold = 0.0;
-	sig0ptwoprevold = 0.0;
-
-	Rpold = R0;
-	Rnold = R0;
-
-	nloopold = 0;
-
-	a1 = aa1*R0;
-
-	// TRIAL State variables
-	def = 0.0;
-	F = 0.0;
-	stif = E0;	
-
-	// CONVERGED State variables
-	defold = 0.0;
-	Fold = 0.0;
-	stifold = E0; 
-
-	// Yield Strain
-	eyieldp = sigyieldp/E0; 
-	eyieldn = sigyieldn/E0;
-
 }
 
 // Constructor with optional strain hardening parameters a3, a4, a5 and a6
 SteelMPF::SteelMPF
-	(int tag, double FYp, double FYn, double E, double Bp, double Bn, double Rr, double A1, double A2, double A3, double A4, double A5, double A6) :
+	(int tag, double FYp, double FYn, double E, double Bp, double Bn, double Rr, double A1, double A2, double A3, double A4, double A5, double A6)
+	: SteelMPF(tag, FYp, FYn, E, Bp, Bn, Rr, A1, A2, A3, A4, A5, A6, nullptr)
+{
+}
+
+// Canonical constructor — all parameters, owns all initialization
+SteelMPF::SteelMPF
+	(int tag, double FYp, double FYn, double E, double Bp, double Bn,
+		double Rr, double A1, double A2, double A3, double A4, double A5, double A6,
+		const UltParams* ult) :
 UniaxialMaterial(tag, MAT_TAG_SteelMPF),
-	sigyieldp(FYp), sigyieldn(FYn), E0(E), bp(Bp), bn(Bn), R0(Rr), aa1(A1), a2(A2), a3(A3), a4(A4), a5(A5), a6(A6)
+	sigyieldp(FYp), sigyieldn(FYn), E0(E), bp(Bp), bn(Bn), R0(Rr), aa1(A1), a2(A2), a3(A3), a4(A4), a5(A5), a6(A6),
+	sigultp(DBL_MAX), sigultn(DBL_MAX), Rult0(Rr), hasSigUlt(ult != nullptr)
 
 {
+	R0  = checkGreaterThan(tag, "R0",  R0,  0.0);
+	aa1 = checkGreaterOrEqual(tag, "cR1", aa1, 0.0);
+	aa1 = checkLowerThan(tag, "cR1", aa1, 1.0);
+	a2  = checkGreaterThan(tag, "cR2", a2,  0.0);
+
+	if (ult != nullptr) {
+		sigultp = checkGreaterOrEqual(tag, "sigultp", ult->sigultp, sigyieldp);
+		sigultn = checkGreaterOrEqual(tag, "sigultn", ult->sigultn, sigyieldn);
+		Rult0 = checkGreaterThan(tag, "Rult0", ult->Rult0, 0.0);
+	}
+
 	// Sets all history and state variables to initial values
 
 	// TRIAL History variables
@@ -297,17 +353,17 @@ UniaxialMaterial(tag, MAT_TAG_SteelMPF),
 	// CONVERGED State variables
 	defold = 0.0;
 	Fold = 0.0;
-	stifold = E0; 
+	stifold = E0;
 
 	// Yield Strain
-	eyieldp = sigyieldp/E0; 
+	eyieldp = sigyieldp/E0;
 	eyieldn = sigyieldn/E0;
 
 }
 
 // blank constructor
 SteelMPF::SteelMPF() :UniaxialMaterial(0, MAT_TAG_SteelMPF),
-	sigyieldp(0.0), sigyieldn(0.0), E0(0.0), bp(0.0), bn(0.0), R0(0.0), aa1(0.0), a2(0.0), a3(0.0), a4(0.0), a5(0.0), a6(0.0)
+	sigyieldp(0.0), sigyieldn(0.0), E0(0.0), bp(0.0), bn(0.0), R0(0.0), aa1(0.0), a2(0.0), a3(0.0), a4(0.0), a5(0.0), a6(0.0), sigultp(DBL_MAX), sigultn(DBL_MAX), Rult0(0.0), hasSigUlt(false)
 {
 
 }
@@ -378,13 +434,13 @@ void SteelMPF::determineTrialState(double def)
 		erpmaxmax=0.0;
 		ernmaxmax=0.0;
 
-		e0p=eyieldp;
-		sig0p=sigyieldp;
+		sig0p = sigyieldp;
+		e0p = sig0p / E0;
 		e0ptwoprev=e0p;
 		sig0ptwoprev=sig0p;
 
-		e0n=-eyieldn;
-		sig0n=-sigyieldn;
+		sig0n = -sigyieldn;
+		e0n = sig0n / E0;
 		e0ntwoprev=e0n;
 		sig0ntwoprev=sig0n;
 
@@ -403,32 +459,26 @@ void SteelMPF::determineTrialState(double def)
 
 			if (inc==1) {
 
-				e0p=eyieldp;
-				sig0p=sigyieldp;
+				sig0p = sigyieldp;
+				e0p = sig0p / E0;
 				e0ptwoprev=e0p;
 				sig0ptwoprev=sig0p;
 
-				double estp=(e-erp)/(e0p-erp);
-				double sigstp, etInnerp;
-				mpStressTangent(estp, Rp, bp, &sigstp, &etInnerp);
-				double sig=sigrp+sigstp*(sig0p-sigrp);
-				double Et=((sig0p-sigrp)/(e0p-erp))*etInnerp;
+				double sig, Et;
+				evalMpStressTangent(e, erp, sigrp, e0p, sig0p, sigultp, Rp, bp, sig, Et);
 
 				F = sig;
 				stif = Et;
 
 			} else {
 
-				e0n=-eyieldn;
-				sig0n=-sigyieldn;
+				sig0n = -sigyieldn;
+				e0n = sig0n / E0;
 				e0ntwoprev=e0n;
 				sig0ntwoprev=sig0n;
 
-				double estn=(e-ern)/(e0n-ern);
-				double sigstn, etInnern;
-				mpStressTangent(estn, Rn, bn, &sigstn, &etInnern);
-				double sig=sigrn+sigstn*(sig0n-sigrn);
-				double Et=((sig0n-sigrn)/(e0n-ern))*etInnern;
+				double sig, Et;
+				evalMpStressTangent(e, ern, sigrn, e0n, sig0n, -sigultn, Rn, bn, sig, Et);
 
 				F = sig;
 				stif = Et;
@@ -518,10 +568,13 @@ void SteelMPF::determineTrialState(double def)
 					sigstar = 0.0;
 				}
 
-				sigy = sigy - sigstar;
-
-				e0n=(sigy*(1.0-bn)+E0*ern-sigrn)/(E0*(1.0-bn));
-				sig0n=sigrn+E0*(e0n-ern);
+				const double e0nbase = (sigy * (1.0 - bn) + E0 * ern - sigrn) / (E0 * (1.0 - bn));
+				const double sig0nbase = sigrn + E0 * (e0nbase - ern);
+				sig0n = sig0nbase - sigstar;
+				if (hasSigUlt && sig0n < -sigultn) {
+					sig0n = -sigultn;
+				}
+				e0n = ern + (sig0n - sigrn) / E0;
 
 				double em;
 
@@ -541,25 +594,16 @@ void SteelMPF::determineTrialState(double def)
 					Rn = Rnold;
 				}
 
-				double estn=(e-ern)/(e0n-ern);
-				double sigstn, etInnern;
-				mpStressTangent(estn, Rn, bn, &sigstn, &etInnern);
+				double sig, Et;
+				evalMpStressTangent(e, ern, sigrn, e0n, sig0n, -sigultn, Rn, bn, sig, Et);
 
-				double sig=sigrn+sigstn*(sig0n-sigrn);
-				double Et=((sig0n-sigrn)/(e0n-ern))*etInnern;
+				double siglimit, Etlimit;
+				evalMpStressTangent(e, erntwoprev, sigrntwoprev, e0ntwoprev,
+					sig0ntwoprev, -sigultn, Rntwoprev, bn, siglimit, Etlimit);
 
-				double estnlimit=(e-erntwoprev)/(e0ntwoprev-erntwoprev);
-				double sigstnlimit, etInnerNlimit;
-				mpStressTangent(estnlimit, Rntwoprev, bn, &sigstnlimit, &etInnerNlimit);
-
-				double siglimit=sigrntwoprev+sigstnlimit*(sig0ntwoprev-sigrntwoprev);
-				double Etlimit=((sig0ntwoprev-sigrntwoprev)/(e0ntwoprev-erntwoprev))*etInnerNlimit;
-
-				double Rcontrol=Rntwoprev;
-				double estcontrol=(ern-erntwoprev)/(e0ntwoprev-erntwoprev);
-				double sigstcontrol;
-				mpStressTangent(estcontrol, Rcontrol, bn, &sigstcontrol, nullptr);
-				double sigcontrol=sigrntwoprev+sigstcontrol*(sig0ntwoprev-sigrntwoprev);
+				double sigcontrol, Etcontrol;
+				evalMpStressTangent(ern, erntwoprev, sigrntwoprev, e0ntwoprev,
+					sig0ntwoprev, -sigultn, Rntwoprev, bn, sigcontrol, Etcontrol);
 
 				if (sigrn < sigcontrol) {
 					outn=1;
@@ -590,19 +634,12 @@ void SteelMPF::determineTrialState(double def)
 
 				Rp=Rpold;
 
-				double estp=(e-erp)/(e0p-erp);
-				double sigstp, etInnerp;
-				mpStressTangent(estp, Rp, bp, &sigstp, &etInnerp);
+				double sig, Et;
+				evalMpStressTangent(e, erp, sigrp, e0p, sig0p, sigultp, Rp, bp, sig, Et);
 
-				double sig=sigrp+sigstp*(sig0p-sigrp);
-				double Et=((sig0p-sigrp)/(e0p-erp))*etInnerp;
-
-				double estplimit=(e-erptwoprev)/(e0ptwoprev-erptwoprev);
-				double sigstplimit, etInnerPlimit;
-				mpStressTangent(estplimit, Rptwoprev, bp, &sigstplimit, &etInnerPlimit);
-
-				double siglimit=sigrptwoprev+sigstplimit*(sig0ptwoprev-sigrptwoprev);
-				double Etlimit=((sig0ptwoprev-sigrptwoprev)/(e0ptwoprev-erptwoprev))*etInnerPlimit;
+				double siglimit, Etlimit;
+				evalMpStressTangent(e, erptwoprev, sigrptwoprev, e0ptwoprev,
+					sig0ptwoprev, sigultp, Rptwoprev, bp, siglimit, Etlimit);
 
 				if (erp>erptwoprev && outp==0) {
 
@@ -657,10 +694,13 @@ void SteelMPF::determineTrialState(double def)
 					sigstar = 0.0;
 				}
 
-				sigy = sigy + sigstar;
-
-				e0p = (sigy*(1.0-bp)+E0*erp-sigrp)/(E0*(1.0-bp));
-				sig0p = sigrp+E0*(e0p-erp);
+				const double e0pbase = (sigy * (1.0 - bp) + E0 * erp - sigrp) / (E0 * (1.0 - bp));
+				const double sig0pbase = sigrp + E0 * (e0pbase - erp);
+				sig0p = sig0pbase + sigstar;
+				if (hasSigUlt && sig0p > sigultp) {
+					sig0p = sigultp;
+				}
+				e0p = erp + (sig0p - sigrp) / E0;
 
 				double em;
 
@@ -680,25 +720,16 @@ void SteelMPF::determineTrialState(double def)
 					Rp = Rpold;
 				}
 
-				double estp=(e-erp)/(e0p-erp);
-				double sigstp, etInnerp;
-				mpStressTangent(estp, Rp, bp, &sigstp, &etInnerp);
+				double sig, Et;
+				evalMpStressTangent(e, erp, sigrp, e0p, sig0p, sigultp, Rp, bp, sig, Et);
 
-				double sig=sigrp+sigstp*(sig0p-sigrp);
-				double Et=((sig0p-sigrp)/(e0p-erp))*etInnerp;
+				double siglimit, Etlimit;
+				evalMpStressTangent(e, erptwoprev, sigrptwoprev, e0ptwoprev,
+					sig0ptwoprev, sigultp, Rptwoprev, bp, siglimit, Etlimit);
 
-				double estplimit=(e-erptwoprev)/(e0ptwoprev-erptwoprev);
-				double sigstplimit, etInnerPlimit;
-				mpStressTangent(estplimit, Rptwoprev, bp, &sigstplimit, &etInnerPlimit);
-
-				double siglimit=sigrptwoprev+sigstplimit*(sig0ptwoprev-sigrptwoprev);
-				double Etlimit=((sig0ptwoprev-sigrptwoprev)/(e0ptwoprev-erptwoprev))*etInnerPlimit;
-
-				double Rcontrol=Rptwoprev;
-				double estcontrol=(erp-erptwoprev)/(e0ptwoprev-erptwoprev);
-				double sigstcontrol;
-				mpStressTangent(estcontrol, Rcontrol, bp, &sigstcontrol, nullptr);
-				double sigcontrol=sigrptwoprev+sigstcontrol*(sig0ptwoprev-sigrptwoprev);
+				double sigcontrol, Etcontrol;
+				evalMpStressTangent(erp, erptwoprev, sigrptwoprev, e0ptwoprev,
+					sig0ptwoprev, sigultp, Rptwoprev, bp, sigcontrol, Etcontrol);
 
 				if (sigrp > sigcontrol) {
 					outp=1;
@@ -727,19 +758,12 @@ void SteelMPF::determineTrialState(double def)
 
 				Rn=Rnold;
 
-				double estn=(e-ern)/(e0n-ern);
-				double sigstn, etInnern;
-				mpStressTangent(estn, Rn, bn, &sigstn, &etInnern);
+				double sig, Et;
+				evalMpStressTangent(e, ern, sigrn, e0n, sig0n, -sigultn, Rn, bn, sig, Et);
 
-				double sig=sigrn+sigstn*(sig0n-sigrn);
-				double Et=((sig0n-sigrn)/(e0n-ern))*etInnern;
-
-				double estnlimit=(e-erntwoprev)/(e0ntwoprev-erntwoprev);
-				double sigstnlimit, etInnerNlimit;
-				mpStressTangent(estnlimit, Rntwoprev, bn, &sigstnlimit, &etInnerNlimit);
-
-				double siglimit=sigrntwoprev+sigstnlimit*(sig0ntwoprev-sigrntwoprev);
-				double Etlimit=((sig0ntwoprev-sigrntwoprev)/(e0ntwoprev-erntwoprev))*etInnerNlimit;
+				double siglimit, Etlimit;
+				evalMpStressTangent(e, erntwoprev, sigrntwoprev, e0ntwoprev,
+					sig0ntwoprev, -sigultn, Rntwoprev, bn, siglimit, Etlimit);
 
 				if (ern < erntwoprev && outn == 0) {
 
@@ -980,7 +1004,10 @@ int SteelMPF::revertToStart()
 
 UniaxialMaterial* SteelMPF::getCopy()
 {
-	SteelMPF* theCopy = new SteelMPF(this->getTag(), sigyieldp, sigyieldn, E0, bp, bn, R0, aa1, a2, a3, a4, a5, a6); 
+	UltParams ult{sigultp, sigultn, Rult0};
+	SteelMPF* theCopy = new SteelMPF(this->getTag(), sigyieldp, sigyieldn,
+		E0, bp, bn, R0, aa1, a2, a3, a4, a5, a6,
+		hasSigUlt ? &ult : nullptr);
 
 	// CONVERGED History variables
 	theCopy-> incold = incold;
@@ -1076,11 +1103,11 @@ UniaxialMaterial* SteelMPF::getCopy()
 int SteelMPF::sendSelf (int commitTag, Channel& theChannel)
 {
 	int res = 0;
-	static Vector data(42);
+	static Vector data(46);
 
 	data(0) = this->getTag();
 
-	// Material properties
+	// Material properties (slots 1-12: unchanged from original layout)
 	data(1) = sigyieldp;
 	data(2) = sigyieldn;
 	data(3) = E0;
@@ -1094,7 +1121,7 @@ int SteelMPF::sendSelf (int commitTag, Channel& theChannel)
 	data(11) = a5;
 	data(12) = a6;
 
-	// CONVERGED History variables
+	// CONVERGED History variables (slots 13-38: unchanged from original layout)
 	data(13) = incold;
 
 	data(14) = Rptwoprevold;
@@ -1133,10 +1160,16 @@ int SteelMPF::sendSelf (int commitTag, Channel& theChannel)
 
 	data(38) = nloopold;
 
-	// CONVERGED State variables
+	// CONVERGED State variables (slots 39-41: unchanged from original layout)
 	data(39) = defold;
 	data(40) = Fold;
 	data(41) = stifold;
+
+	// Ultimate stress cap parameters (slots 42-45: appended)
+	data(42) = sigultp;
+	data(43) = sigultn;
+	data(44) = Rult0;
+	data(45) = hasSigUlt ? 1.0 : 0.0;
 
 	// Data is only sent after convergence, so no trial variables
 	// need to be sent through data vector
@@ -1152,7 +1185,7 @@ int SteelMPF::recvSelf (int commitTag, Channel& theChannel, FEM_ObjectBroker& th
 {
 	int res = 0;
 
-	static Vector data(42);
+	static Vector data(46);
 	res = theChannel.recvVector(this->getDbTag(), commitTag, data);
 
 	if (res < 0) {
@@ -1162,7 +1195,7 @@ int SteelMPF::recvSelf (int commitTag, Channel& theChannel, FEM_ObjectBroker& th
 	else {
 		this->setTag(int(data(0)));
 
-		// Material properties
+		// Material properties (slots 1-12)
 		sigyieldp = data(1);
 		sigyieldn = data(2);
 		E0 = data(3);
@@ -1176,7 +1209,7 @@ int SteelMPF::recvSelf (int commitTag, Channel& theChannel, FEM_ObjectBroker& th
 		a5 = data(11);
 		a6 = data(12);
 
-		// CONVERGED History variables
+		// CONVERGED History variables (slots 13-38)
 		incold = int(data(13));
 
 		Rptwoprevold = data(14);
@@ -1215,10 +1248,16 @@ int SteelMPF::recvSelf (int commitTag, Channel& theChannel, FEM_ObjectBroker& th
 
 		nloopold = int(data(38));
 
-		// CONVERGED State variables
+		// CONVERGED State variables (slots 39-41)
 		defold = data(39);
 		Fold = data(40);
 		stifold = data(41);
+
+		// Ultimate stress cap parameters (slots 42-45)
+		sigultp = data(42);
+		sigultn = data(43);
+		Rult0 = data(44);
+		hasSigUlt = (data(45) > 0.5);
 
 		// Copy converged history values into trial values since data is only
 		// sent (received) after convergence
@@ -1285,7 +1324,11 @@ void SteelMPF::Print (OPS_Stream& s, int flag)
         s << " a1 = " << a3 << "\n";
         s << " a2 = " << a4 << "\n";
         s << " a3 = " << a5 << "\n";
-        s << " a4 = " << a6 << "\n\n";
+        s << " a4 = " << a6 << "\n";
+        s << "fup = " << sigultp << "\n";
+        s << "fun = " << sigultn << "\n";
+        s << "Ru0 = " << Rult0 << "\n";
+        s << "\n";
     }
     
     if (flag == OPS_PRINT_PRINTMODEL_JSON) {
@@ -1303,6 +1346,9 @@ void SteelMPF::Print (OPS_Stream& s, int flag)
         s << "\"a1\": " << a3 << ", ";
         s << "\"a2\": " << a4 << ", ";
         s << "\"a3\": " << a5 << ", ";
-        s << "\"a4\": " << a6 << "}";
+        s << "\"a4\": " << a6 << ", ";
+        s << "\"fup\": " << sigultp << ", ";
+        s << "\"fun\": " << sigultn << ", ";
+        s << "\"Ru0\": " << Rult0 << "}";
     }
 }

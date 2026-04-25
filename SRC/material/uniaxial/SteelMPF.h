@@ -34,13 +34,28 @@
 class SteelMPF : public UniaxialMaterial
 {
 public:
+	// Optional ultimate stress cap parameters, passed as a single aggregate.
+	// Extend this struct (not the constructor signatures) when adding new cap params.
+	struct UltParams {
+		double sigultp;
+		double sigultn;
+		double Rult0;
+	};
+
 	// Typical constructor
 	SteelMPF(int tag, double sigyieldp, double sigyieldn,
 		double E0, double bp, double bn, double R0, double a1, double a2);
 
-	// Constructor with strain hardening parameters a3 and a4
+	// Constructor with strain hardening parameters a3, a4, a5 and a6
 	SteelMPF(int tag, double sigyieldp, double sigyieldn,
-		double E0, double bp, double bn, double R0, double a1, double a2, double a3, double a4, double a5, double a6);
+		double E0, double bp, double bn, double R0, double a1, double a2,
+		double a3, double a4, double a5, double a6);
+
+	// Canonical constructor — pass ult=nullptr (or omit) for no ultimate stress cap
+	SteelMPF(int tag, double sigyieldp, double sigyieldn,
+		double E0, double bp, double bn, double R0, double a1, double a2,
+		double a3, double a4, double a5, double a6,
+		const UltParams* ult);
 
 	// Blank constructor
 	SteelMPF();
@@ -89,6 +104,10 @@ private:
 	double a4;			// Isotropic hardening parameter 
 	double a5;			// Isotropic hardening parameter 
 	double a6;			// Isotropic hardening parameter 
+	double sigultp;		// ultimate stress cap in tension
+	double sigultn;		// ultimate stress cap in compression
+	double Rult0;		// Initial value of the ultimate cap curvature parameter
+	bool hasSigUlt;		// True when an ultimate stress cap is active
 
 	// TRIAL State Variables
 	double def;
@@ -180,6 +199,11 @@ private:
 
 	// Calculates the trial state variables based on the trial strain
 	void determineTrialState(double dStrain);
+
+	// Evaluates MP stress and tangent, dispatching to the cap variant when hasSigUlt is true.
+	void evalMpStressTangent(double e, double er, double sigr,
+		double e0, double sig0, double sigult, double R, double b,
+		double &sig, double &Et) const;
 
 };
 
