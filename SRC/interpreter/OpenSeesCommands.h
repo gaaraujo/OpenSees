@@ -508,6 +508,14 @@ void* OPS_PFEMSolver_LumpM();
 void* OPS_SymSparseLinSolver();
 void* OPS_FullGenLinLapackSolver();
 
+// CUDA Solvers
+#ifdef _AMGX
+void* OPS_AmgXLinSolver();
+#endif // _AMGX
+#ifdef _CUDSS
+void* OPS_CuDSSLinSolver();
+#endif // _CUDSS
+
 void* OPS_PlainNumberer();
 
 void* OPS_PlainHandler();

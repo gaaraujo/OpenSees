@@ -148,6 +148,12 @@ bool setMPIDSOEFlag = false;
 #endif
 #endif
 
+// Sparse CUDA Solvers
+#ifdef _CUDA
+#ifdef _AMGX
+#include <AmgXLinSolver.h>
+#endif // _AMGX
+#endif // _CUDA
 
 // active object
 static OpenSeesCommands* cmds = 0;
@@ -1068,6 +1074,22 @@ int OPS_GetNumRemainingInputArgs()
     return interp->getNumRemainingInputArgs();
 }
 
+void* OPS_GetVoidPtr()
+{
+    if (cmds == 0) return nullptr;
+    DL_Interpreter* interp = cmds->getInterpreter();
+    return interp->getVoidPtr();
+}
+
+// Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
+int OPS_ExpandDictArgs()
+{
+    if (cmds == 0) return 0;
+    DL_Interpreter* interp = cmds->getInterpreter();
+    if (interp == nullptr) return 0;
+    return interp->expandDictArgs() ? 1 : 0;
+}
+
 int OPS_GetIntInput(int *numData, int*data)
 {
     if (cmds == 0) return 0;
@@ -1175,13 +1197,6 @@ const char * OPS_GetStringFromAll(char* buffer, int len)
 	return "Invalid String Input!";
     }
     return res;
-}
-
-void *OPS_GetVoidPtr(void)
-{
-    if (cmds == 0) return nullptr;
-    DL_Interpreter* interp = cmds->getInterpreter();
-    return interp->getVoidPtr();
 }
 
 int OPS_SetString(const char* str)
@@ -1528,6 +1543,20 @@ int OPS_System()
     } else if (strcmp(type, "UmfPack") == 0 || strcmp(type, "Umfpack") == 0) {
 
 	theSOE = (LinearSOE*)OPS_UmfpackGenLinSolver();
+
+// CUDA Solvers
+#ifdef _CUDA
+#ifdef _AMGX
+    } else if (strcmp(type,"AmgX") == 0 || strcmp(type,"amgx") == 0 
+                || strcmp(type,"AMGX") == 0 || strcmp(type,"Amgx") == 0) {
+        theSOE = (LinearSOE*)OPS_AmgXLinSolver();
+#endif // _AMGX
+#ifdef _CUDSS
+    } else if (strcmp(type,"CuDSS") == 0 || strcmp(type,"cudss") == 0 
+                || strcmp(type,"CUDSS") == 0 || strcmp(type,"cuDSS") == 0) {
+        theSOE = (LinearSOE*)OPS_CuDSSLinSolver();
+#endif // _CUDSS
+#endif // _CUDA
 
     } else if (strcmp(type,"FullGeneral") == 0) {
 	// now must determine the type of solver to create from rest of args

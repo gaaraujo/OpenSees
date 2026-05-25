@@ -260,6 +260,81 @@ PythonModule::getString() {
 #endif
 }
 
+void* PythonModule::getVoidPtr() {
+    if (wrapper.getCurrentArg() >= wrapper.getNumberArgs()) {
+        return nullptr;
+    }
+
+    PyObject *o = PyTuple_GetItem(wrapper.getCurrentArgv(), wrapper.getCurrentArg());
+    wrapper.incrCurrentArg();
+    return static_cast<void*>(o);
+}
+
+// Expands a dict argument into CLI-style key-value pairs (e.g., {"key": val} -> "-key", val)
+bool PythonModule::expandDictArgs() {
+    int nArgs = wrapper.getNumberArgs();
+    int curArg = wrapper.getCurrentArg();
+    if (curArg >= nArgs) {
+        return false;
+    }
+
+    PyObject *argv = wrapper.getCurrentArgv();
+    if (!argv || !PyTuple_Check(argv)) {
+        return false;
+    }
+
+    PyObject *cfgObj = PyTuple_GetItem(argv, curArg);
+    if (!PyDict_Check(cfgObj)) {
+        return false;
+    }
+
+    Py_ssize_t nItems = PyDict_Size(cfgObj);
+    PyObject *newArgs = PyTuple_New(nArgs - 1 + 2 * (nItems > 0 ? nItems : 0));
+    if (!newArgs) {
+        return false;
+    }
+
+    // 1) Copy arguments before the dict unchanged
+    for (int i = 0; i < curArg; ++i) {
+        PyObject *item = PyTuple_GetItem(argv, i);
+        Py_INCREF(item);
+        PyTuple_SET_ITEM(newArgs, i, item);
+    }
+
+    // 2) Expand dict into "-key", value pairs
+    PyObject *key, *val;
+    Py_ssize_t pos = 0;
+    int idx = curArg;
+
+    while (PyDict_Next(cfgObj, &pos, &key, &val)) {
+        if (!PyUnicode_Check(key)) {
+            continue; // ignore non-string keys
+        }
+
+        PyObject *dashKey = PyUnicode_FromFormat("-%U", key);
+        if (!dashKey) {
+            Py_DECREF(newArgs);
+            return false;
+        }
+        PyTuple_SET_ITEM(newArgs, idx++, dashKey);
+
+        // Preserve value type so OPS_GetIntInput / OPS_GetDoubleInput keep working
+        Py_INCREF(val);
+        PyTuple_SET_ITEM(newArgs, idx++, val);
+    }
+
+    // 3) Copy remaining original args after the dict, shifted to the right
+    for (int i = curArg + 1; i < nArgs; ++i) {
+        PyObject *item = PyTuple_GetItem(argv, i);
+        Py_INCREF(item);
+        PyTuple_SET_ITEM(newArgs, idx++, item);
+    }
+
+    // Resume parsing at the same logical position (now pointing at the first "-key").
+    wrapper.resetCommandLine(PyTuple_Size(newArgs), curArg + 1, newArgs, true);
+    return true;
+}
+
 const char *PythonModule::getStringFromAll(char* buffer, int len) {
     if (wrapper.getCurrentArg() >= wrapper.getNumberArgs()) {
         return 0;
@@ -318,18 +393,6 @@ const char *PythonModule::getStringFromAll(char* buffer, int len) {
 
     return PyString_AS_STRING(o);
 #endif
-}
-
-void*
-PythonModule::getVoidPtr()
-{
-    if (wrapper.getCurrentArg() >= wrapper.getNumberArgs()) {
-        return nullptr;
-    }
-    PyObject *obj =
-        PyTuple_GetItem(wrapper.getCurrentArgv(), wrapper.getCurrentArg());
-    wrapper.incrCurrentArg();
-    return static_cast<void*>(obj);
 }
 
 int

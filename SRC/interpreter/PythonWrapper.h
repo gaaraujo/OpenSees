@@ -61,7 +61,7 @@ public:
     ~PythonWrapper();
 
     // reset command line
-    void resetCommandLine(int nArgs, int cArg, PyObject* argv);
+    void resetCommandLine(int nArgs, int cArg, PyObject* argv, bool takeOwnership = false);
     void resetCommandLine(int cArg);
 
     // wrapper commands
@@ -95,6 +95,7 @@ public:
 private:
     // command line arguments
     PyObject* currentArgv;
+    bool ownsCurrentArgv;
     int currentArg;
     int numberArgs;
 

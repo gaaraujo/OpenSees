@@ -179,6 +179,18 @@ int OPS_ResetCurrentInputArg(int cArg)
     return 0;
 }
 
+extern "C"
+void* OPS_GetVoidPtr()
+{
+    return nullptr;
+}
+
+extern "C"
+int OPS_ExpandDictArgs()
+{
+    return 0;
+}
+
 //extern "C"
 int OPS_ResetInput(ClientData clientData,
     Tcl_Interp* interp,

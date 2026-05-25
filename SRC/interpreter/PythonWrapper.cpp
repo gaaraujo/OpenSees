@@ -48,7 +48,7 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 static PythonWrapper* wrapper = 0;
 
 PythonWrapper::PythonWrapper()
-    :currentArgv(0), currentArg(0), numberArgs(0),
+    :currentArgv(0), ownsCurrentArgv(false), currentArg(0), numberArgs(0),
      methodsOpenSees(), opensees_docstring(""), currentResult(0)
 {
     wrapper = this;
@@ -56,16 +56,29 @@ PythonWrapper::PythonWrapper()
 
 PythonWrapper::~PythonWrapper()
 {
+    if (ownsCurrentArgv && currentArgv) {
+        Py_DECREF(currentArgv);
+        currentArgv = 0;
+        ownsCurrentArgv = false;
+    }
     wrapper = 0;
 }
 
 void
-PythonWrapper::resetCommandLine(int nArgs, int cArg, PyObject* argv)
+PythonWrapper::resetCommandLine(int nArgs, int cArg, PyObject* argv, bool takeOwnership)
 {
+    if (ownsCurrentArgv && currentArgv) {
+        Py_DECREF(currentArgv);
+    }
+    currentArgv = argv;
+    ownsCurrentArgv = takeOwnership;
+    if (ownsCurrentArgv && currentArgv) {
+        Py_INCREF(currentArgv);
+    }
+
     numberArgs = nArgs;
     currentArg = cArg-1;
     if (currentArg < 0) currentArg = 0;
-    currentArgv = argv;
 }
 
 void

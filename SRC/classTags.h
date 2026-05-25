@@ -1146,7 +1146,10 @@
 #define LinSOE_TAGS_SparsePythonCompressedLinSOE 100101
 #define LinSOE_TAGS_SparsePythonCOOLinSOE        100102
 #define LinSOE_TAGS_PARDISOGenLinSOE 99990
-
+#define LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE 31
+#define LinSOE_TAGS_CudaBcsrLinSOE_FLOAT 32
+#define LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE_FLOAT 33
+#define LinSOE_TAGS_CudaBcsrLinSOE_FLOAT_DOUBLE 34
 
 #define SOLVER_TAGS_FullGenLinLapackSolver  	1
 #define SOLVER_TAGS_BandGenLinLapackSolver  	2
@@ -1181,6 +1184,8 @@
 #define SOLVER_TAGS_CuSP                                31
 #define SOLVER_TAGS_PFEMQuasiSolver                     32
 #define SOLVER_TAGS_PFEMDiaSolver                       33
+#define SOLVER_TAGS_AmgXLinSolver                       34
+#define SOLVER_TAGS_CuDSSLinSolver                      35
 #define SOLVER_TAGS_SparsePythonCompressedLinSolver     100201
 #define SOLVER_TAGS_SparsePythonCOOLinSolver            100202
 

@@ -6,6 +6,11 @@
 #==============================================================================
 add_library(OPS_Api OBJECT)
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  # Headers-only object library: no TU on Linux/macOS without explicit linker language.
+  set_target_properties(OPS_Api PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
 target_sources(OPS_InterpTcl
   PRIVATE
     elementAPI_TCL.cpp
