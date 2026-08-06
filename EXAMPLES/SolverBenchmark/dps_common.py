@@ -116,6 +116,18 @@ def mesh_counts(factor: float) -> Tuple[float, Tuple[int, int, int]]:
     return mesh_size, (count(BAR_LENGTH), count(BAR_THICKNESS), count(BAR_HEIGHT))
 
 
+def estimate_free_dofs(nx: int, ny: int, nz: int) -> int:
+    """Approximate free DOFs after fixX(0) on the Scott brick (3 dof/node)."""
+    nodes = (nx + 1) * (ny + 1) * (nz + 1)
+    fixed = (ny + 1) * (nz + 1)
+    return 3 * (nodes - fixed)
+
+
+# Performance benchmarks should use meshes with at least this many free DOFs.
+# factor=12 → ~117k; factor=10 is only ~69k.
+MIN_BENCHMARK_DOFS = 100_000
+DEFAULT_BENCHMARK_FACTORS = [12.0, 14.0, 16.0]
+
 def build_solid_bar(ops, nx: int, ny: int, nz: int) -> None:
     ops.wipe()
     ops.model("basic", "-ndm", 3, "-ndf", 3)
