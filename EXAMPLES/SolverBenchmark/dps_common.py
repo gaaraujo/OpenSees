@@ -5,11 +5,11 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 import numpy as np
-from scipy import sparse
-from scipy.sparse.linalg import eigsh, spsolve
+from scipy import sparse as sp
+from scipy.sparse.linalg import eigsh
 
 # Scott cantilever brick (same geometry as benchmark_python_sparse.py)
 BAR_LENGTH = 10.0
@@ -19,6 +19,12 @@ ELASTIC_MODULUS = 29_000.0
 POISSON_RATIO = 0.3
 STEEL_DENSITY = 0.284e-3 / 386.4
 YIELD_STRESS = 50.0
+
+# optional scikit-umfpack
+try:
+    import scikits.umfpack as _umfpack
+except ImportError:  # pragma: no cover
+    _umfpack = None
 
 
 def import_opensees():
@@ -37,32 +43,211 @@ def import_opensees():
     return ops
 
 
-class ScipyLinSolver:
-    """CSR SciPy direct solver for PythonSparse / DistributedPythonSparse."""
+class SciPyUmfpackSolver:
+    """
+    Fallback UMFPACK solver if openseespy-solvers < 0.2.0 is unavailable.
+
+    Prefer ``openseespy_solvers.scipy.umfpack(scheme='CSC', index_dtype='auto')``.
+    """
 
     def __init__(self):
+        if _umfpack is None:
+            raise ImportError(
+                "scikits.umfpack is required (pip/conda install scikit-umfpack)"
+            )
+        self.umf = _umfpack.UmfpackContext("di")
         self.A = None
 
+    def _wrap_csc(self, num_eqn: int, nnz: int, index_ptr, indices, values):
+        # OpenSees buffers are int32 / float64. Own contiguous copies for the
+        # UMFPACK C API, but stay on int32 ('di') — do not widen to int64.
+        indptr = np.array(
+            np.frombuffer(index_ptr, dtype=np.int32, count=num_eqn + 1),
+            dtype=np.int32,
+            order="C",
+            copy=True,
+        )
+        idx = np.array(
+            np.frombuffer(indices, dtype=np.int32, count=nnz),
+            dtype=np.int32,
+            order="C",
+            copy=True,
+        )
+        vals = np.array(
+            np.frombuffer(values, dtype=np.float64, count=nnz),
+            dtype=np.float64,
+            order="C",
+            copy=True,
+        )
+        return sp.csc_matrix((vals, idx, indptr), shape=(num_eqn, num_eqn))
+
     def solve(self, **kwargs):
-        num_eqn = kwargs["num_eqn"]
-        nnz = kwargs["nnz"]
-        indptr = np.frombuffer(kwargs["index_ptr"], dtype=np.int32, count=num_eqn + 1)
-        idx = np.frombuffer(kwargs["indices"], dtype=np.int32, count=nnz)
-        vals = np.frombuffer(kwargs["values"], dtype=np.float64, count=nnz)
-        b = np.frombuffer(kwargs["rhs"], dtype=np.float64, count=num_eqn)
+        num_eqn = int(kwargs["num_eqn"])
+        nnz = int(kwargs["nnz"])
+        matrix_status = kwargs["matrix_status"]
+        rhs = np.frombuffer(kwargs["rhs"], dtype=np.float64, count=num_eqn)
         x = np.frombuffer(kwargs["x"], dtype=np.float64, count=num_eqn)
-        if kwargs["matrix_status"] != "UNCHANGED" or self.A is None:
-            self.A = sparse.csr_matrix(
-                (vals.copy(), idx.copy(), indptr.copy()), shape=(num_eqn, num_eqn)
+
+        if num_eqn == 0:
+            return 0
+        if num_eqn == 1:
+            vals = np.frombuffer(kwargs["values"], dtype=np.float64, count=nnz)
+            if nnz == 1 and vals[0] != 0.0:
+                x[0] = rhs[0] / vals[0]
+                return 0
+            return -1
+
+        if matrix_status == "STRUCTURE_CHANGED" or self.A is None:
+            self.A = self._wrap_csc(
+                num_eqn, nnz, kwargs["index_ptr"], kwargs["indices"], kwargs["values"]
             )
-        x[:] = spsolve(self.A, b)
+            self.umf.symbolic(self.A)
+            self.umf.numeric(self.A)
+        elif matrix_status == "COEFFICIENTS_CHANGED":
+            vals = np.frombuffer(kwargs["values"], dtype=np.float64, count=nnz)
+            self.A.data[:] = np.ascontiguousarray(vals)
+            self.umf.numeric(self.A)
+        elif getattr(self.umf, "_numeric", None) is None:
+            self.A = self._wrap_csc(
+                num_eqn, nnz, kwargs["index_ptr"], kwargs["indices"], kwargs["values"]
+            )
+            self.umf.symbolic(self.A)
+            self.umf.numeric(self.A)
+
+        # One write into OpenSees x buffer (UMFPACK returns a new array).
+        x[:] = self.umf.solve(_umfpack.UMFPACK_A, self.A, np.ascontiguousarray(rhs))
         return 0
 
 
-class ScipyEigenSolver:
-    """Generalized eigen solver matching the serial PythonSparse eigen benchmark."""
+# Back-compat alias
+SciPyUmfpackSolver64 = SciPyUmfpackSolver
 
-    def __init__(self):
+
+class CuPyCGSolver:
+    """CuPy conjugate gradient — same interface as PR #1676 benchmark_python_sparse."""
+
+    def __init__(self, rtol: float = 1.0e-7, atol: float = 1.0e-12, maxiter=None):
+        import cupy as cp
+        import cupyx.scipy.sparse.linalg  # noqa: F401
+
+        self._cp = cp
+        self.rtol = rtol
+        self.atol = atol
+        self.maxiter = maxiter
+        self.A = None
+
+    def solve(self, **kwargs):
+        cp = self._cp
+        import cupyx.scipy.sparse.linalg as cpsla
+
+        num_eqn = kwargs["num_eqn"]
+        nnz = kwargs["nnz"]
+        matrix_status = kwargs["matrix_status"]
+        indptr = np.frombuffer(kwargs["index_ptr"], dtype=np.int32, count=num_eqn + 1)
+        idx = np.frombuffer(kwargs["indices"], dtype=np.int32, count=nnz)
+        vals = np.frombuffer(kwargs["values"], dtype=np.float64, count=nnz)
+
+        if matrix_status == "STRUCTURE_CHANGED" or self.A is None:
+            self.A = cp.sparse.csr_matrix(
+                (cp.asarray(vals), cp.asarray(idx), cp.asarray(indptr)),
+                shape=(num_eqn, num_eqn),
+            )
+        elif matrix_status == "COEFFICIENTS_CHANGED":
+            self.A.data[:] = cp.asarray(vals)
+
+        rhs_gpu = cp.asarray(np.frombuffer(kwargs["rhs"], dtype=np.float64, count=num_eqn))
+        x_gpu, info = cpsla.cg(
+            self.A, rhs_gpu, tol=self.rtol, atol=self.atol, maxiter=self.maxiter
+        )
+        np.frombuffer(kwargs["x"], dtype=np.float64, count=num_eqn)[:] = cp.asnumpy(x_gpu)
+        return -int(info)
+
+
+def python_lin_scheme(backend: str) -> str:
+    """OpenSees sparse scheme for a Python linear backend (CSC for UMFPACK)."""
+    backend = backend.lower().replace("_", "-")
+    if backend in ("umfpack", "scikit-umfpack", "scikitumfpack"):
+        return "CSC"
+    return "CSR"
+
+
+def lin_numberer(backend: str, np_: int = 1) -> str:
+    """
+    Numberer for linear backends.
+
+    RCM only for BandSPD / CuPy CG (bandwidth / iterative locality).
+    Direct sparse solvers use Plain (serial) or ParallelPlain (MPI).
+    """
+    backend = backend.lower().replace("_", "-")
+    if backend in ("cupy-cg", "cupycg", "cg", "bandspd"):
+        if np_ > 1:
+            return "ParallelPlain"
+        return "RCM"
+    # Direct sparse: umfpack, nvmath, umfpack-native, mumps, …
+    if np_ > 1:
+        return "ParallelPlain"
+    return "Plain"
+
+
+def make_python_lin_solver(backend: str) -> Any:
+    """
+    Build a PythonSparse-compatible linear solver (openseespy-solvers >= 0.2.0).
+
+    backend:
+      - 'umfpack' / 'scikit-umfpack' : scipy.umfpack (CSC, index_dtype=auto→di)
+      - 'nvmath' / 'cudss'           : nvmath.direct_solver (CSR / cuDSS)
+      - 'cupy-cg' / 'cupycg'         : cupy.cg
+
+    Stats/residual SpMV stay off (record_stats=False). Local lean fallbacks are
+    used only if the package import fails.
+    """
+    backend = backend.lower().replace("_", "-")
+    if backend in ("umfpack", "scikit-umfpack", "scikitumfpack"):
+        try:
+            from openseespy_solvers.scipy import umfpack
+
+            return umfpack(
+                scheme="CSC",
+                writable="none",
+                index_dtype="auto",
+                record_stats=False,
+            ).to_openseespy()["solver"]
+        except Exception:
+            return SciPyUmfpackSolver()
+
+    if backend in ("nvmath", "cudss", "nvmath-cudss"):
+        from openseespy_solvers.nvmath import direct_solver
+
+        return direct_solver(
+            scheme="CSR", writable="none", record_stats=False
+        ).to_openseespy()["solver"]
+
+    if backend in ("cupy-cg", "cupycg", "cg"):
+        try:
+            from openseespy_solvers.cupy import cg
+
+            return cg(
+                scheme="CSR",
+                writable="none",
+                rtol=1.0e-7,
+                atol=1.0e-12,
+                record_stats=False,
+            ).to_openseespy()["solver"]
+        except Exception:
+            return CuPyCGSolver(rtol=1.0e-7, atol=1.0e-12)
+
+    raise ValueError(
+        f"unsupported python linear backend '{backend}' "
+        "(use 'umfpack', 'nvmath', or 'cupy-cg'; SciPy spsolve is intentionally excluded)"
+    )
+
+
+class ScipyEigenSolver:
+    """Generalized eigen solver matching benchmark_python_sparse_eigen.py (PR #1676)."""
+
+    def __init__(self, maxiter=None, tol: float = 0.0):
+        self.maxiter = maxiter
+        self.tol = tol
         self._k = None
         self._m = None
 
@@ -70,6 +255,7 @@ class ScipyEigenSolver:
         num_eqn = kwargs["num_eqn"]
         nnz = kwargs["nnz"]
         num_modes = int(kwargs["num_modes"])
+        find_smallest = bool(kwargs.get("find_smallest", True))
         indptr = np.frombuffer(kwargs["index_ptr"], dtype=np.int32, count=num_eqn + 1)
         idx = np.frombuffer(kwargs["indices"], dtype=np.int32, count=nnz)
         kvals = np.frombuffer(kwargs["k_values"], dtype=np.float64, count=nnz)
@@ -77,10 +263,10 @@ class ScipyEigenSolver:
         status = kwargs.get("matrix_status", "STRUCTURE_CHANGED")
 
         if status == "STRUCTURE_CHANGED" or self._k is None:
-            self._k = sparse.csr_matrix(
+            self._k = sp.csr_matrix(
                 (kvals.copy(), idx.copy(), indptr.copy()), shape=(num_eqn, num_eqn)
             )
-            self._m = sparse.csr_matrix(
+            self._m = sp.csr_matrix(
                 (mvals.copy(), idx.copy(), indptr.copy()), shape=(num_eqn, num_eqn)
             )
         elif status == "COEFFICIENTS_CHANGED":
@@ -95,15 +281,26 @@ class ScipyEigenSolver:
             evals = evals[:k]
             evecs = evecs[:, :k]
         else:
-            evals, evecs = eigsh(self._k, k=k, M=self._m, which="SM", sigma=0.0)
+            eigsh_kwargs = {
+                "k": k,
+                "M": self._m,
+                "which": "LM",
+            }
+            if find_smallest:
+                eigsh_kwargs["sigma"] = 0.0
+            if self.maxiter is not None:
+                eigsh_kwargs["maxiter"] = self.maxiter
+            if self.tol > 0.0:
+                eigsh_kwargs["tol"] = self.tol
+            evals, evecs = eigsh(self._k, **eigsh_kwargs)
 
         evals_buf = np.frombuffer(kwargs["eigenvalues"], dtype=np.float64, count=num_modes)
         evecs_buf = np.frombuffer(
             kwargs["eigenvectors"], dtype=np.float64, count=num_modes * num_eqn
         )
         evals_buf[:k] = evals[:k]
-        for mode in range(k):
-            evecs_buf[mode * num_eqn : (mode + 1) * num_eqn] = evecs[:, mode]
+        # mode-major layout (same as PR #1676)
+        evecs_buf[: k * num_eqn] = evecs[:, :k].T.flatten()
         return None
 
 
@@ -123,10 +320,23 @@ def estimate_free_dofs(nx: int, ny: int, nz: int) -> int:
     return 3 * (nodes - fixed)
 
 
-# Performance benchmarks should use meshes with at least this many free DOFs.
-# factor=12 → ~117k; factor=10 is only ~69k.
+# Large-mesh gate used by older DPS-only scripts (factor=12 → ~117k).
 MIN_BENCHMARK_DOFS = 100_000
 DEFAULT_BENCHMARK_FACTORS = [12.0, 14.0, 16.0]
+
+# Agreed PR #1676-style matrices (distributed + GPU backends).
+AGREED_LINEAR_FACTORS = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+AGREED_EIGEN_FACTORS = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+AGREED_NPS = [1, 2, 4, 8]
+
+# Native / heavy-direct skip thresholds (same spirit as benchmark_python_sparse.py).
+# scikit-umfpack at factor=16 (~269k) has OOM'd this machine; skip like native UmfPack.
+NATIVE_SKIP_LIMITS = {
+    "umfpack-native": 14.0,
+    "umfpack": 16.0,
+    "bandspd": 20.0,
+}
+
 
 def build_solid_bar(ops, nx: int, ny: int, nz: int) -> None:
     ops.wipe()
@@ -179,17 +389,19 @@ def far_corner_disp(ops) -> Optional[Tuple[float, float, float]]:
     return None
 
 
-def system_cfg(ops, distributed: bool, pid: int):
-    """Return (system_name, dict, numberer) for scipy CSR."""
+def system_cfg(ops, distributed: bool, pid: int, python_backend: str = "umfpack"):
+    """Return (system_name, dict, numberer) for a PythonSparse-family solver."""
+    np_ = 2 if distributed else 1
+    solver = make_python_lin_solver(python_backend) if (not distributed or pid == 0) else None
+    cfg = {
+        "solver": solver,
+        "scheme": python_lin_scheme(python_backend),
+        "writable": "none",
+    }
+    numberer = lin_numberer(python_backend, np_)
     if distributed:
-        cfg = {
-            "solver": ScipyLinSolver() if pid == 0 else None,
-            "scheme": "CSR",
-            "writable": "none",
-        }
-        return "DistributedPythonSparse", cfg, "ParallelPlain"
-    cfg = {"solver": ScipyLinSolver(), "scheme": "CSR", "writable": "none"}
-    return "PythonSparse", cfg, "RCM"
+        return "DistributedPythonSparse", cfg, numberer
+    return "PythonSparse", cfg, numberer
 
 
 def eigen_cfg(distributed: bool, pid: int):
