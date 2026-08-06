@@ -12,7 +12,10 @@ Usage (MPI OpenSeesPy on PYTHONPATH / build-mp/Release):
 
   # Partitioned gather-to-root — DistributedPythonSparse + ParallelPlain
   mpirun -np 2 python3 EXAMPLES/SolverBenchmark/benchmark_distributed_python_sparse.py out.csv
-  mpirun -np 4 python3 ... out.csv --mesh-factors 2,4,6
+  mpirun -np 4 python3 ... out.csv --mesh-factors 12,14,16
+
+Default mesh factors start at 12 (~117k free DOFs) so timings are past the
+toy-size regime. Override with --mesh-factors only if you know the DOF count.
 
 Note: solve is gather-to-root on rank 0. Expect enablement / overhead vs serial
 PythonSparse, not strong scaling of the factorization.
@@ -29,9 +32,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from dps_common import (
+    DEFAULT_BENCHMARK_FACTORS,
+    MIN_BENCHMARK_DOFS,
     apply_far_face_load,
     build_solid_bar,
     cantilever_load,
+    estimate_free_dofs,
     far_corner_disp,
     import_opensees,
     mesh_counts,
@@ -47,6 +53,7 @@ CSV_HEADER = (
     "mesh_c",
     "num_elements",
     "num_nodes",
+    "est_free_dofs",
     "status",
     "time_seconds",
     "displacement_x",
@@ -54,11 +61,10 @@ CSV_HEADER = (
     "displacement_z",
 )
 
-DEFAULT_FACTORS = [2.0, 4.0, 6.0, 8.0]
-
 
 def run_one(mesh_factor: float, distributed: bool, pid: int, num_steps: int = 5):
     mesh_size, (nx, ny, nz) = mesh_counts(mesh_factor)
+    est_dofs = estimate_free_dofs(nx, ny, nz)
     build_solid_bar(ops, nx, ny, nz)
     n_far = sum(
         1
@@ -88,6 +94,7 @@ def run_one(mesh_factor: float, distributed: bool, pid: int, num_steps: int = 5)
         "nx": nx,
         "ny": ny,
         "nz": nz,
+        "est_dofs": est_dofs,
         "nele": len(ops.getEleTags()),
         "nnodes": len(ops.getNodeTags()),
         "status": status,
@@ -101,8 +108,13 @@ def main():
     ap.add_argument("csv", type=Path, help="output CSV path")
     ap.add_argument(
         "--mesh-factors",
-        default=",".join(str(f) for f in DEFAULT_FACTORS),
-        help="comma-separated mesh refinement factors",
+        default=",".join(str(f) for f in DEFAULT_BENCHMARK_FACTORS),
+        help="comma-separated mesh refinement factors (default starts ~117k DOFs)",
+    )
+    ap.add_argument(
+        "--allow-small",
+        action="store_true",
+        help=f"allow meshes with fewer than {MIN_BENCHMARK_DOFS} estimated free DOFs",
     )
     args = ap.parse_args()
 
@@ -118,9 +130,19 @@ def main():
     factors = [float(x) for x in args.mesh_factors.split(",") if x.strip()]
 
     if pid == 0:
+        max_dofs = max(
+            estimate_free_dofs(*mesh_counts(f)[1]) for f in factors
+        )
+        if max_dofs < MIN_BENCHMARK_DOFS and not args.allow_small:
+            print(
+                f"ERROR: largest mesh has ~{max_dofs} free DOFs; "
+                f"need >= {MIN_BENCHMARK_DOFS} (use factor>=12 or --allow-small)",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         args.csv.parent.mkdir(parents=True, exist_ok=True)
         print(f"=== {solver_name} brick benchmark ===")
-        print(f"mesh factors: {factors}")
+        print(f"mesh factors: {factors} (max ~{max_dofs} free DOFs)")
         print(f"CSV: {args.csv}\n")
 
     rows = []
@@ -135,7 +157,8 @@ def main():
             status_str = "✓" if result["status"] == 0 else "✗"
             print(
                 f"  factor={factor:.1f} mesh=({result['nx']},{result['ny']},{result['nz']}) "
-                f"ele={result['nele']} {status_str} {result['seconds']:.4f}s",
+                f"~dofs={result['est_dofs']} ele={result['nele']} "
+                f"{status_str} {result['seconds']:.4f}s",
                 flush=True,
             )
             tip = result["tip"] or (None, None, None)
@@ -146,6 +169,7 @@ def main():
                 result["mesh_size"],
                 result["nele"],
                 result["nnodes"],
+                result["est_dofs"],
                 result["status"],
                 f"{result['seconds']:.6f}",
                 tip[0],
