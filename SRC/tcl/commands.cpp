@@ -97,6 +97,8 @@ OPS_Stream *opserrPtr = &sserr;
 #include <elementAPI.h>
 extern "C" int         OPS_ResetInputNoBuilder(ClientData clientData, Tcl_Interp * interp, int cArg, int mArg, TCL_Char * *argv, Domain * domain);
 extern int OPS_partition();
+extern int OPS_modalDamping(void);
+extern int OPS_modalDampingQ(void);
 
 #include <packages.h>
 
@@ -405,6 +407,7 @@ extern void *OPS_DistributedCudaDirectSparseSolver(void);
 #include <EigenSOE.h>
 #include <EigenSolver.h>
 #include <ArpackSOE.h>
+#include <WoodburySOE.h>
 #include <ArpackSolver.h>
 #include <SymArpackSOE.h>
 #include <SymArpackSolver.h>
@@ -3930,8 +3933,18 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
   if (theSOE != 0) {
     if (theStaticAnalysis != 0)
       theStaticAnalysis->setLinearSOE(*theSOE);
-    if (theTransientAnalysis != 0)
+    if (theTransientAnalysis != 0) {
       theTransientAnalysis->setLinearSOE(*theSOE);
+#ifdef _PARALLEL_INTERPRETERS
+      int soeTag = theSOE->getClassTag();
+      if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
+          soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+        theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
+      } else {
+        theTransientAnalysis->setWoodburyParallel(-1, 0, 0);
+      }
+#endif
+    }
 
 #ifdef _PARALLEL_PROCESSING
     if (theStaticAnalysis != 0 || theTransientAnalysis != 0) {
@@ -5942,7 +5955,10 @@ eigenAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 #ifdef _PARALLEL_INTERPRETERS
 	// OpenSeesMP: same pattern as MumpsParallelSOE
 	if (theSOE != 0) {
-	  int soeTag = theSOE->getClassTag();
+	  LinearSOE *nativeSOE = theSOE;
+	  if (nativeSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
+	    nativeSOE = &((WoodburySOE *)nativeSOE)->getInnerSOE();
+	  int soeTag = nativeSOE->getClassTag();
 	  if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
 	      soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
 	      soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
@@ -8890,116 +8906,35 @@ rayleighDamping(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **
 
 
 
-int 
+int
 modalDamping(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 {
-  if (argc < 2) { 
-    opserr << "WARNING modalDamping ?factor - not enough arguments to command\n";
+  OPS_ResetInputNoBuilder(clientData, interp, 1, argc, argv, &theDomain);
+  if (OPS_modalDamping() < 0)
     return TCL_ERROR;
-  }
 
-  if (numEigen == 0 || theEigenSOE == 0) {
-    opserr << "WARNING - modalDamping - eigen command needs to be called first - NO MODAL DAMPING APPLIED\n ";
+#ifdef _PARALLEL_INTERPRETERS
+  // OPS_Analysis is not compiled with _PARALLEL_INTERPRETERS; wire Woodbury here.
+  if (theTransientAnalysis != 0 && theSOE != 0) {
+    int soeTag = theSOE->getClassTag();
+    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
+        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+      theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
+    } else {
+      theTransientAnalysis->setWoodburyParallel(-1, 0, 0);
+    }
   }
-
-  int numModes = argc - 1;
-  double factor;
-  Vector modalDampingValues(numEigen);
-
-  if (numModes != 1 && numModes < numEigen) {
-    opserr << "WARNING modalDamping - fewer damping factors than modes were specified\n";
-    opserr << "                     - zero damping will be applied to un-specified modes" << endln;
-  }
-  if (numModes > numEigen) {
-    opserr << "WARNING modalDamping - more damping factors than modes were specifed\n";
-    opserr << "                     - ignoring additional damping factors" << endln;
-  }    
-
-  // 
-  // read in values and set factors
-  //
-
-  if (numModes == 1) {
-    if (Tcl_GetDouble(interp, argv[1], &factor) != TCL_OK) {
-      opserr << "WARNING modalDamping - could not read factor for all modes \n";
-      return TCL_ERROR;	        
-    }        
-    
-    for (int i=0; i<numEigen; i++)
-      modalDampingValues[i] = factor;
-  }
-  else {
-    for (int i=0; i<numModes; i++) {
-      if (Tcl_GetDouble(interp, argv[1+i], &factor) != TCL_OK) {
-	opserr << "WARNING modalDamping - could not read factor for model " << i+1 << endln;
-	return TCL_ERROR;	        
-      }        
-      modalDampingValues[i] = factor;    
-    } 
-    for (int i = numModes; i < numEigen; i++)
-      modalDampingValues[i] = 0.0;
-  }
-  
-  // set factors in domain
-  theDomain.setModalDampingFactors(&modalDampingValues, true);
+#endif
 
   return TCL_OK;
 }
 
-int 
+int
 modalDampingQ(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 {
-  if (argc < 2) { 
-    opserr << "WARNING modalDampingQ ?factor - not enough arguments to command\n";
+  OPS_ResetInputNoBuilder(clientData, interp, 1, argc, argv, &theDomain);
+  if (OPS_modalDampingQ() < 0)
     return TCL_ERROR;
-  }
-
-  if (numEigen == 0 || theEigenSOE == 0) {
-    opserr << "WARNING - modalDampingQ - eigen command needs to be called first - NO MODAL DAMPING APPLIED\n ";
-  }
-
-
-  int numModes = argc - 1;
-  double factor = 0;
-  Vector modalDampingValues(numEigen);
-
-  if (numModes != 1 && numModes < numEigen) {
-    opserr << "WARNING modalDampingQ - fewer damping factors than modes were specified\n";
-    opserr << "                      - zero damping will be applied to un-specified modes" << endln;
-  }
-  if (numModes > numEigen) {
-    opserr << "WARNING modalDampingQ - more damping factors than modes were specifed\n";
-    opserr << "                      - ignoring additional damping factors" << endln;
-  }    
-
-  // 
-  // read in values and set factors
-  //
-
-  if (numModes == 1) {
-    if (Tcl_GetDouble(interp, argv[1], &factor) != TCL_OK) {
-      opserr << "WARNING modalDampingQ - could not read factor for all modes \n";
-      return TCL_ERROR;	        
-    }        
-    
-    for (int i=0; i<numEigen; i++)
-      modalDampingValues[i] = factor;
-  }
-  else {
-    for (int i=0; i<numModes; i++) {
-      if (Tcl_GetDouble(interp, argv[1+i], &factor) != TCL_OK) {
-	opserr << "WARNING modalDampingQ - could not read factor for model " << i+1 << endln;
-	return TCL_ERROR;	        
-      }        
-      modalDampingValues[i] = factor;    
-    } 
-    for (int i = numModes; i < numEigen; i++)
-      modalDampingValues[i] = 0.0;
-  }
-
-  // set factors in domain
-  theDomain.setModalDampingFactors(&modalDampingValues, false);
-
   return TCL_OK;
 }
 

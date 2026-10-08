@@ -57,7 +57,9 @@ class MumpsParallelSOE : public MumpsSOE
 
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);            
+    int setB(const Vector &v, bool localOnly) override;
     const Vector &getB(void);
+    const Vector &getB(bool localOnly) override;
     void zeroB(void);
     int solve(void);
 

@@ -220,8 +220,8 @@ int HHTGeneralized::formEleTangent(FE_Element *theEle)
     else if (statusFlag == INITIAL_TANGENT)
         theEle->addKiToTang(alphaF*c1);
     else if (statusFlag == HALL_TANGENT)  {
-        theEle->addKtToTang(alphaF*c1*cFactor);
-        theEle->addKiToTang(alphaF*c1*iFactor);    
+        theEle->addKtToTang(alphaF*c1*curFactor);
+        theEle->addKiToTang(alphaF*c1*initFactor);    
     }
 
     theEle->addCtoTang(alphaF*c2);

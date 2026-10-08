@@ -9,11 +9,15 @@ target_sources(OPS_SysOfEqn
   PRIVATE
     DomainSolver.cpp
     LinearSOE.cpp
+    WoodburySOE.cpp
+    WoodburySolver.cpp
     LinearSOESolver.cpp
   PUBLIC
     DomainSolver.h
     LinearSOE.h
     LinearSOESolver.h
+    WoodburySOE.h
+    WoodburySolver.h
 )
 
 target_include_directories(OPS_SysOfEqn PUBLIC ${CMAKE_CURRENT_LIST_DIR})

@@ -82,6 +82,7 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <SymmGeneralizedEigenSolver.h>
 #include <SymmGeneralizedEigenSOE.h>
 #include <ArpackSOE.h>
+#include <WoodburySOE.h>
 #include <LoadControl.h>
 #include <CTestPFEM.h>
 #include <PFEMIntegrator.h>
@@ -485,6 +486,26 @@ OpenSeesCommands::eigen(int typeSolver, double shift,
                 // OpenSeesMP / OpenSeesPy: same pattern as MumpsParallelSOE
                 if (theSOE != 0) {
                     int soeTag = theSOE->getClassTag();
+                    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
+                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+                        ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
+                        MachineBroker *theMachineBroker = this->getMachineBroker();
+                        if (theMachineBroker != 0) {
+                            theArpackSOE->setProcessID(theMachineBroker->getPID());
+                            theArpackSOE->setChannels(this->getNumChannels(),
+                                                      this->getChannels());
+                        }
+                    }
+                }
+#endif
+
+#ifdef _PARALLEL_INTERPRETERS
+                // OpenSeesMP / OpenSeesPy: same pattern as MumpsParallelSOE
+                if (theSOE != 0) {
+                    LinearSOE *nativeSOE = theSOE;
+                    if (nativeSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
+                        nativeSOE = &((WoodburySOE *)nativeSOE)->getInnerSOE();
+                    int soeTag = nativeSOE->getClassTag();
                     if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
                         soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
                         ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
@@ -3418,128 +3439,6 @@ int OPS_stopTimer()
     if (theTimer == 0) return -1;
     theTimer->pause();
     opserr << *theTimer;
-    return 0;
-}
-
-int OPS_modalDamping()
-{
-    if (cmds == 0) return 0;
-    if (OPS_GetNumRemainingInputArgs() < 1) {
-	opserr << "WARNING modalDamping ?factor - not enough arguments to command\n";
-	return -1;
-    }
-
-    int numEigen = cmds->getNumEigen();
-    EigenSOE* theEigenSOE = cmds->getEigenSOE();
-
-    if (numEigen == 0 || theEigenSOE == 0) {
-	opserr << "WARNING modalDamping - eigen command needs to be called first - NO MODAL DAMPING APPLIED\n ";
-	return -1;
-    }
-
-    int numModes = OPS_GetNumRemainingInputArgs();
-    if (numModes != 1 && numModes < numEigen) {
-      opserr << "WARNING modalDamping - fewer damping factors than modes were specified\n";
-      opserr << "                     - zero damping will be applied to un-specified modes" << endln;
-    }
-    if (numModes > numEigen) {
-      opserr << "WARNING modalDamping - more damping factors than modes were specifed\n";
-      opserr << "                     - ignoring additional damping factors" << endln;
-    }    
-
-    double factor;
-    Vector modalDampingValues(numEigen);
-    int numdata = 1;
-
-    //
-    // read in values and set factors
-    //
-    if (numModes == 1) {
-      if (OPS_GetDoubleInput(&numdata, &factor) < 0) {
-	opserr << "WARNING modalDamping - could not read factor for all modes \n";
-	return -1;
-      }
-      for (int i = 0; i < numEigen; i++)
-	modalDampingValues(i) = factor;
-    }
-    else {
-      for (int i = 0; i < numModes; i++) {
-	if (OPS_GetDoubleInput(&numdata, &factor) < 0) {
-	  opserr << "WARNING modalDamping - could not read factor for mode " << i+1 << endln;
-	  return -1;
-	}
-	modalDampingValues(i) = factor;
-      }
-      for (int i = numModes; i < numEigen; i++)
-	modalDampingValues(i) = 0.0;
-    }
-
-    Domain* theDomain = OPS_GetDomain();
-    if (theDomain != 0) {
-	theDomain->setModalDampingFactors(&modalDampingValues, true);
-    }
-
-    return 0;
-}
-
-int OPS_modalDampingQ()
-{
-    if (cmds == 0) return 0;
-    if (OPS_GetNumRemainingInputArgs() < 1) {
-	opserr << "WARNING modalDampingQ ?factor - not enough arguments to command\n";
-	return -1;
-    }
-
-    int numEigen = cmds->getNumEigen();
-    EigenSOE* theEigenSOE = cmds->getEigenSOE();
-
-    if (numEigen == 0 || theEigenSOE == 0) {
-	opserr << "WARNING modalDampingQ - eigen command needs to be called first - NO MODAL DAMPING APPLIED\n ";
-	return -1;
-    }
-
-    int numModes = OPS_GetNumRemainingInputArgs();
-    if (numModes != 1 && numModes < numEigen) {
-      opserr << "WARNING modalDampingQ - fewer damping factors than modes were specified\n";
-      opserr << "                      - zero damping will be applied to un-specified modes" << endln;
-    }
-    if (numModes > numEigen) {
-      opserr << "WARNING modalDampingQ - more damping factors than modes were specifed\n";
-      opserr << "                      - ignoring additional damping factors" << endln;
-    }
-    
-    double factor;
-    Vector modalDampingValues(numEigen);
-    int numdata = 1;
-
-    //
-    // read in values and set factors
-    //
-    if (numModes == 1) {
-      if (OPS_GetDoubleInput(&numdata, &factor) < 0) {
-	opserr << "WARNING modalDampingQ - could not read factor for all modes \n";
-	return -1;
-      }
-      for (int i = 0; i < numEigen; i++)
-	modalDampingValues(i) = factor;
-    }
-    else {
-      for (int i = 0; i < numModes; i++) {
-	if (OPS_GetDoubleInput(&numdata, &factor) < 0) {
-	  opserr << "WARNING modalDampingQ - could not read factor for mode " << i+1 << endln;
-	  return -1;
-	}
-	modalDampingValues(i) = factor;
-      }
-      for (int i = numModes; i < numEigen; i++)
-	modalDampingValues(i) = 0.0;
-    }
-
-    Domain* theDomain = OPS_GetDomain();
-    if (theDomain != 0) {
-	theDomain->setModalDampingFactors(&modalDampingValues, false);
-    }
-
     return 0;
 }
 

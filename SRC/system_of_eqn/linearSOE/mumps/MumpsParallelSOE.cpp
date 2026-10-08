@@ -490,9 +490,29 @@ MumpsParallelSOE::getB(void)
   } 
 
   return *vectB;
-}	
+}
 
-  
+const Vector &
+MumpsParallelSOE::getB(bool localOnly)
+{
+  if (localOnly) {
+    if (myVectB == 0) {
+      opserr << "FATAL MumpsParallelSOE::getB(true) - myVectB == 0";
+      exit(-1);
+    }
+    return *myVectB;
+  }
+  return this->getB();
+}
+
+int
+MumpsParallelSOE::setB(const Vector &v, bool localOnly)
+{
+  (void)localOnly; // setB is already local (writes myB only)
+  return this->setB(v, 1.0);
+}
+
+	
 int 
 MumpsParallelSOE::sendSelf(int commitTag, Channel &theChannel)
 {

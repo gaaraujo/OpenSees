@@ -185,8 +185,8 @@ int WilsonTheta::formEleTangent(FE_Element *theEle)
     else if (statusFlag == INITIAL_TANGENT)
         theEle->addKiToTang(c1);
     else if (statusFlag == HALL_TANGENT)  {
-        theEle->addKtToTang(c1*cFactor);
-        theEle->addKiToTang(c1*iFactor);   
+        theEle->addKtToTang(c1*curFactor);
+        theEle->addKiToTang(c1*initFactor);   
     }
  
     theEle->addCtoTang(c2);

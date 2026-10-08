@@ -54,8 +54,13 @@ class Vector;
 #define SECOND_TANGENT 5
 #define HALL_TANGENT 6
 
+class ModalDamping;
+class WoodburySOE;
+
 class IncrementalIntegrator : public Integrator
 {
+    friend class ModalDamping;
+
   public:
     IncrementalIntegrator(int classTag);
     virtual ~IncrementalIntegrator();
@@ -69,9 +74,9 @@ class IncrementalIntegrator : public Integrator
 
     // methods to set up the system of equations
     virtual int  formTangent(int statusFlag = CURRENT_TANGENT);
-    virtual int  formTangent(int statusFlag, 
-			     double iFactor,
-			     double cFactor);    
+    virtual int  formTangent(int statusFlag,
+			     double initFactor,
+			     double curFactor);
     virtual int  formUnbalance(void);
 
     // pure virtual methods to define the FE_ELe and DOF_Group contributions
@@ -91,6 +96,8 @@ class IncrementalIntegrator : public Integrator
     int setupModal(const Vector *modalDampingValues);
     int addModalDampingForce(const Vector *modalDampingValues);
     int addModalDampingMatrix(const Vector *modalDampingValues);
+    int addModalDampingWoodbury(const Vector *modalFactors);
+    ModalDamping *getModalDamping(void);
     virtual double getCFactor(void);
     
     virtual const Vector &getVel(void);
@@ -112,24 +119,19 @@ class IncrementalIntegrator : public Integrator
     virtual int  formNodalUnbalance(void);        
     virtual int  formElementResidual(void);            
     int statusFlag;
-    double iFactor;
-    double cFactor;
+    double initFactor;
+    double curFactor;
 
     //    Vector *modalDampingValues;
     EigenSOE *theEigenSOE;
-    double *eigenVectors;
-    Vector *eigenValues;
-    Vector *dampingForces;
     bool isDiagonal;
     double *diagMass;
-    Vector *mV;
-    Vector *tmpV1;
-    Vector *tmpV2;
-    
+
   private:
     LinearSOE *theSOE;
     AnalysisModel *theAnalysisModel;
     ConvergenceTest *theTest;
+    ModalDamping *theModalDamping;
 
 };
 

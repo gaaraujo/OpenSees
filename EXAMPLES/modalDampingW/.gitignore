@@ -1,0 +1,13 @@
+*.png
+*.out
+*.log
+*.txt
+*.dat
+!tabasFN.txt
+!RSN960_NORTHR_LOS270.txt
+__pycache__/
+results/
+results_mp/
+logs/
+logs_mp/
+figures/

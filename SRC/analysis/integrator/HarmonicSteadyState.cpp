@@ -238,8 +238,8 @@ HarmonicSteadyState::formEleTangent(FE_Element *theEle)
 	theEle->addMtoTang(-twoPiSquareOverPeriodSquare);
   } else if (statusFlag == HALL_TANGENT)  {
     theEle->zeroTangent();
-    theEle->addKtToTang(cFactor);
-    theEle->addKiToTang(iFactor);
+    theEle->addKtToTang(curFactor);
+    theEle->addKiToTang(initFactor);
 	theEle->addMtoTang(-twoPiSquareOverPeriodSquare);
   }
 

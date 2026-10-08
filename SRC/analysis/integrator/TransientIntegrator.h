@@ -54,9 +54,9 @@ class TransientIntegrator : public IncrementalIntegrator
     virtual ~TransientIntegrator();
 
     virtual int formTangent(int statFlag);
-    virtual int formTangent(int statusFlag, 
-			    double iFactor,
-			    double cFactor);    
+    virtual int formTangent(int statusFlag,
+			    double initFactor,
+			    double curFactor);
 
     virtual int formUnbalance(void);
     virtual int formEleResidual(FE_Element *theEle);

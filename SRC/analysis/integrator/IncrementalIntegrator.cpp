@@ -31,6 +31,8 @@
 // What: "@(#) IncrementalIntegrator.C, revA"
 
 #include <IncrementalIntegrator.h>
+#include <ModalDamping.h>
+#include <WoodburySOE.h>
 #include <FE_Element.h>
 #include <LinearSOE.h>
 #include <AnalysisModel.h>
@@ -39,32 +41,24 @@
 #include <FE_EleIter.h>
 #include <DOF_GrpIter.h>
 #include <EigenSOE.h>
+#include <Matrix.h>
 #include <cmath>
+#include <cstring>
 
 IncrementalIntegrator::IncrementalIntegrator(int clasTag)
 :Integrator(clasTag),
- statusFlag(CURRENT_TANGENT), theEigenSOE(0), 
- eigenVectors(0), eigenValues(0), dampingForces(0),isDiagonal(false),diagMass(0),
- mV(0),tmpV1(0),tmpV2(0),
- theSOE(0), theAnalysisModel(0), theTest(0)
+ statusFlag(CURRENT_TANGENT), theEigenSOE(0),
+ isDiagonal(false), diagMass(0),
+ theSOE(0), theAnalysisModel(0), theTest(0),
+ theModalDamping(0)
 {
-  
+  theModalDamping = new ModalDamping(*this);
 }
 
 IncrementalIntegrator::~IncrementalIntegrator()
 {
-  if (eigenValues != 0)
-    delete eigenValues;
-  if (eigenVectors != 0)
-    delete [] eigenVectors;
-  if (dampingForces != 0)
-    delete dampingForces;
-  if (mV != 0)
-    delete mV;
-  if (tmpV1 != 0)
-    delete tmpV1;
-  if (tmpV2 != 0)
-    delete tmpV2;
+  if (theModalDamping != 0)
+    delete theModalDamping;
 }
 
 void
@@ -115,8 +109,8 @@ IncrementalIntegrator::formTangent(int statFlag)
 int 
 IncrementalIntegrator::formTangent(int statFlag, double iFact, double cFact)
 {
-    iFactor = iFact;
-    cFactor = cFact;
+    initFactor = iFact;
+    curFactor = cFact;
     return this->formTangent(statFlag);
 }
 
@@ -432,191 +426,67 @@ IncrementalIntegrator::addModalDampingForce(void)
  */
 
 
-int 
+int
 IncrementalIntegrator::setupModal(const Vector *modalDampingValues)
 {
-  int numModes = modalDampingValues->Size();
-
-  const Vector &eigenvalues = theAnalysisModel->getEigenvalues();
-  int numEigen = eigenvalues.Size();
-
-  if (numEigen < numModes) 
-    numModes = numEigen;
-
-  int numDOF = theSOE->getNumEqn();
-
-  if (eigenValues == 0 || *eigenValues != eigenvalues) {
-    if (eigenValues != 0)
-      delete eigenValues;
-    if (eigenVectors != 0)
-      delete [] eigenVectors;
-    if (dampingForces != 0)
-      delete dampingForces;
-    if (mV != 0)
-      delete mV;
-    if (tmpV1 != 0)
-      delete tmpV1;
-    if (tmpV2 != 0)
-      delete tmpV2;
-    
-    eigenValues = new Vector(eigenvalues);
-    dampingForces = new Vector(numDOF);
-    eigenVectors = new double[numDOF*numModes];
-    mV = new Vector(numDOF);
-    tmpV1 = new Vector(numDOF);
-    tmpV2 = new Vector(numDOF);
-
-    DOF_GrpIter &theDOFs2 = theAnalysisModel->getDOFs();
-    DOF_Group *dofPtr;
-    while ((dofPtr = theDOFs2()) != 0) { 
-      const Matrix &dofEigenvectors =dofPtr->getEigenvectors();
-      const ID &dofID = dofPtr->getID();
-      for (int j=0; j<numModes; j++) {
-	for (int i=0; i<dofID.Size(); i++) {
-	  int id = dofID(i);
-	  if (id >= 0) 
-	    eigenVectors[j*numDOF + id] = dofEigenvectors(i,j);
-	}
-      }
-    }
-
-    double *eigenVectors2 = new double[numDOF*numModes];
-
-    for (int i=0; i<numModes; i++) {
-      double *eigenVectorI = &eigenVectors[numDOF*i];    
-      double *mEigenVectorI = &eigenVectors2[numDOF*i];    
-      Vector v1(eigenVectorI,numDOF);
-      Vector v2(mEigenVectorI,numDOF);
-      this->doMv(v1, v2);    
-    }
-    if (eigenVectors != 0)
-      delete [] eigenVectors;
-    eigenVectors = eigenVectors2;
-  }
-
-  return 0;
+  if (theModalDamping == 0)
+    return -1;
+  return theModalDamping->setupModal(modalDampingValues);
 }
 
-
-int 
+int
 IncrementalIntegrator::addModalDampingForce(const Vector *modalDampingValues)
 {
-  int res = 0;
-  
-  if (modalDampingValues == 0)
-    return 0;
-
-  int numModes = modalDampingValues->Size();
-
-  const Vector &eigenvalues = theAnalysisModel->getEigenvalues();
-  int numEigen = eigenvalues.Size();
-
-  if (numEigen < numModes) {
-    numModes = numEigen;
-    opserr << "WARNING: HAving to reset numModes to : " << numModes << "as not enough eigenvalues. NOTE if 0 you have done something to require new analysis or have not issued eigen command\n";
-  }
-
-  int numDOF = theSOE->getNumEqn();
-
-  if (eigenValues == 0 || *eigenValues != eigenvalues) {
-    this->setupModal(modalDampingValues);
-  }
-
-  const Vector &vel = this->getVel();
-
-  dampingForces->Zero();
-
-  for (int i=0; i<numModes; i++) {
-
-    double eigenvalue = (*eigenValues)(i);
-    double modalDampingValue = (*modalDampingValues)(i);
-    if (eigenvalue > 0 && modalDampingValue != 0.0) {
-      double wn = sqrt(eigenvalue);
-
-      double *eigenVectorI = &eigenVectors[numDOF*i];
-      double beta = 0.0;
-      
-      for (int j=0; j<numDOF; j++) {
-	double eij = eigenVectorI[j];
-	if (eij != 0) {
-	  beta += eij * vel(j);
-	}
-      }
-
-      beta = -2.0 * modalDampingValue * wn * beta;
-
-      for (int j=0; j<numDOF; j++) {
-	double eij = eigenVectorI[j];
-	if (eij != 0)
-	  (*dampingForces)(j) += beta * eij;
-      }
-    }
-  }
-
-  theSOE->setB(*dampingForces);
-  
-  return res;
+  if (theModalDamping == 0)
+    return -1;
+  return theModalDamping->addToUnbalance(modalDampingValues);
 }
-
 
 int
 IncrementalIntegrator::addModalDampingMatrix(const Vector *modalDampingValues) {
-  int res = 0;
-  //    return 0;
+  if (theModalDamping == 0)
+    return -1;
+  return theModalDamping->addToTangent(modalDampingValues, this->getCFactor());
+}
 
-  if (modalDampingValues == 0)
+ModalDamping *
+IncrementalIntegrator::getModalDamping(void)
+{
+  return theModalDamping;
+}
+
+int
+IncrementalIntegrator::addModalDampingWoodbury(const Vector *modalFactors)
+{
+  if (modalFactors == nullptr || theSOE == nullptr)
     return 0;
 
-  double cFactor=this->getCFactor();
-  if (cFactor == 0)
+  WoodburySOE *wb = dynamic_cast<WoodburySOE *>(theSOE);
+  if (wb == nullptr) {
+    opserr << "WARNING IncrementalIntegrator::addModalDampingWoodbury() - "
+              "modalDamping -woodbury requires WoodburySOE wrapper on the analysis\n";
+    return -6;
+  }
+
+  if (theModalDamping == nullptr)
+    return -1;
+
+  Matrix Q;
+  Vector diagD;
+  const int built = theModalDamping->prepareWoodburyLowRank(
+      modalFactors, this->getCFactor(), theSOE->getNumEqn(), Q, diagD);
+
+  if (built == 0) {
+    wb->clearWoodburyBasis();
     return 0;
-
-  int numModes = modalDampingValues->Size();
-
-  const Vector &eigenvalues = theAnalysisModel->getEigenvalues();
-  int numEigen = eigenvalues.Size();
-
-  if (numEigen < numModes) 
-    numModes = numEigen;
-
-  int numDOF = theSOE->getNumEqn();
-
-  if (eigenValues == 0 || *eigenValues != eigenvalues) {
-    this->setupModal(modalDampingValues);
   }
+  if (built < 0)
+    return built;
 
-  for (int dof = 0; dof<numDOF; dof++) {
-    dampingForces->Zero();
-    bool zeroCol = true;
+  if (wb->setWoodburySymmetric(Q, diagD) < 0)
+    return -7;
 
-    for (int i=0; i<numModes; i++) {
-
-      double eigenvalue = (*eigenValues)(i);
-      double modalDampingValue = (*modalDampingValues)(i);      
-      if (eigenvalue > 0 && modalDampingValue != 0.0) {
-	double wn = sqrt(eigenvalue);
-	double *eigenVectorI = &eigenVectors[numDOF*i];
-	double ei_dof = eigenVectors[numDOF*i+dof];
-	
-	if (ei_dof != 0.0) {
-	  zeroCol = false;
-	
-	  double beta = 2.0 * modalDampingValue * wn * ei_dof * cFactor;
-	  
-	  for (int j=0; j<numDOF; j++) {
-	    double eij = eigenVectorI[j];
-	    if (eij != 0)
-	      (*dampingForces)(j) += beta * eij;
-	  }
-	}
-      }
-    }
-    
-    if (zeroCol == false)
-      theSOE->addColA(*dampingForces, dof, 1.0);
-
-  }
-  return res;
+  return wb->rebuildWoodburyBasis();
 }
 
 

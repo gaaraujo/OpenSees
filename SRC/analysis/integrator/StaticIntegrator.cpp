@@ -76,8 +76,8 @@ StaticIntegrator::formEleTangent(FE_Element *theEle)
     theEle->addKiToTang();
   } else if (statusFlag == HALL_TANGENT)  {
     theEle->zeroTangent();
-    theEle->addKtToTang(cFactor);
-    theEle->addKiToTang(iFactor);
+    theEle->addKtToTang(curFactor);
+    theEle->addKiToTang(initFactor);
   } 
 
     return 0;

@@ -70,6 +70,20 @@ LinearSOE::formAp(const Vector &p, Vector &Ap)
   return -1;
 }
 
+const Vector &
+LinearSOE::getB(bool localOnly)
+{
+  (void)localOnly;
+  return this->getB();
+}
+
+int
+LinearSOE::setB(const Vector &v, bool localOnly)
+{
+  (void)localOnly;
+  return this->setB(v, 1.0);
+}
+
 double
 LinearSOE::getDeterminant(void)
 {

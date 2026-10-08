@@ -542,6 +542,12 @@ AnalysisModel::inclModalDampingMatrix(void)
   return myDomain->inclModalDampingMatrix();
 }
 
+ModalDampingOption
+AnalysisModel::getModalDampingOption(void) const
+{
+  return myDomain->getModalDampingOption();
+}
+
 void 
 AnalysisModel::setEigenvector(int mode, const Vector &eigenvalue)
 {

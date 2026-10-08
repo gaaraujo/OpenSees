@@ -40,9 +40,9 @@
 // What: "@(#) AnalysisModel.h, revA"
 
 #include <MovableObject.h>
+#include <Domain.h>
 
 class TaggedObjectStorage;
-class Domain;
 class FE_EleIter;
 class DOF_GrpIter;
 class Graph;
@@ -100,6 +100,7 @@ class AnalysisModel: public MovableObject
     virtual const Vector &getEigenvalues(void);    
     const Vector *getModalDampingFactors(void);
     bool inclModalDampingMatrix(void);
+    ModalDampingOption getModalDampingOption(void) const;
     
     // methods which trigger operations in the Domain
     virtual void setLinks(Domain &theDomain, ConstraintHandler &theHandler);

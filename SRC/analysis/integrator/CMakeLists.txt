@@ -13,6 +13,7 @@ target_sources(OPS_Analysis
        CentralDifference.cpp
        IncrementalIntegrator.cpp
        Integrator.cpp
+       ModalDamping.cpp
        LoadControl.cpp
        HarmonicSteadyState.cpp
        LoadPath.cpp
@@ -30,6 +31,7 @@ target_sources(OPS_Analysis
        CentralDifference.h
        IncrementalIntegrator.h
        Integrator.h
+       ModalDamping.h
        LoadControl.h
        HarmonicSteadyState.h
        LoadPath.h

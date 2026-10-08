@@ -230,8 +230,8 @@ int GeneralizedAlpha::formEleTangent(FE_Element *theEle)
         theEle->addCtoTang(alphaF*c2);
         theEle->addMtoTang(alphaM*c3);
     } else if (statusFlag == HALL_TANGENT)  {
-        theEle->addKtToTang(c1*cFactor);
-        theEle->addKiToTang(c1*iFactor);
+        theEle->addKtToTang(c1*curFactor);
+        theEle->addKiToTang(c1*initFactor);
         theEle->addCtoTang(c2);
         theEle->addMtoTang(c3);
     }    

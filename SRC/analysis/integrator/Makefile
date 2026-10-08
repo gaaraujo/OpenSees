@@ -42,6 +42,7 @@ OBJS       = AlphaOS.o \
 	HSConstraint.o \
     IncrementalIntegrator.o \
 	Integrator.o \
+	ModalDamping.o \
 	KRAlphaExplicit.o \
 	KRAlphaExplicit_TP.o \
 	LoadControl.o \

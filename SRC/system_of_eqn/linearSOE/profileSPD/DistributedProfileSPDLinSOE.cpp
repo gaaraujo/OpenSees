@@ -668,7 +668,27 @@ DistributedProfileSPDLinSOE::getB(void)
   } 
 
   return *vectB;
-}	
+}
+
+const Vector &
+DistributedProfileSPDLinSOE::getB(bool localOnly)
+{
+  if (localOnly) {
+    if (myVectB == 0) {
+      opserr << "FATAL DistributedProfileSPDLinSOE::getB(true) - myVectB == 0";
+      exit(-1);
+    }
+    return *myVectB;
+  }
+  return this->getB();
+}
+
+int
+DistributedProfileSPDLinSOE::setB(const Vector &v, bool localOnly)
+{
+  (void)localOnly; // setB already writes myB only
+  return this->setB(v, 1.0);
+}
 
   
 int 

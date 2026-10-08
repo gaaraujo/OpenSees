@@ -36,6 +36,12 @@
 #ifndef Domain_h
 #define Domain_h
 
+enum ModalDampingOption {
+  MODAL_DAMPING_QUICK = 0,
+  MODAL_DAMPING_INCL_MATRIX = 1,
+  MODAL_DAMPING_WOODBURY = 2
+};
+
 #include <OPS_Stream.h>
 #include <Vector.h>
 
@@ -213,9 +219,11 @@ class Domain
     void setModalProperties(const DomainModalProperties& dmp);
     void unsetModalProperties(void);
     int getModalProperties(DomainModalProperties & dmp) const;
+    int setModalDampingFactors(Vector *, ModalDampingOption option);
     int setModalDampingFactors(Vector *, bool inclModalMatrix = false);
     const Vector *getModalDampingFactors(void);
     bool inclModalDampingMatrix(void);
+    ModalDampingOption getModalDampingOption(void) const;
     
     // methods for other objects to determine if model has changed
     virtual int hasDomainChanged(void);
@@ -323,7 +331,7 @@ class Domain
     double theEigenvalueSetTime;
     DomainModalProperties* theModalProperties;
     Vector *theModalDampingFactors;
-    bool inclModalMatrix;
+    ModalDampingOption modalDampingOption;
 
     int lastChannel;
 

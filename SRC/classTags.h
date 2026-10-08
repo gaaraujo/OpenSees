@@ -1150,6 +1150,7 @@
 #define LinSOE_TAGS_PFEMDiaLinSOE 30
 #define LinSOE_TAGS_SparsePythonCompressedLinSOE 100101
 #define LinSOE_TAGS_SparsePythonCOOLinSOE        100102
+#define LinSOE_TAGS_WoodburySOE                  100103
 #define LinSOE_TAGS_PARDISOGenLinSOE 99990
 #define LinSOE_TAGS_CudaBcsrLinSOE_DOUBLE 31
 #define LinSOE_TAGS_CudaBcsrLinSOE_FLOAT 32
@@ -1195,6 +1196,7 @@
 #define SOLVER_TAGS_CudaHostWorkerSolver                36
 #define SOLVER_TAGS_SparsePythonCompressedLinSolver     100201
 #define SOLVER_TAGS_SparsePythonCOOLinSolver            100202
+#define SOLVER_TAGS_WoodburySolver                      100203
 
 #define RECORDER_TAGS_ElementRecorder		1
 #define RECORDER_TAGS_NodeRecorder		2

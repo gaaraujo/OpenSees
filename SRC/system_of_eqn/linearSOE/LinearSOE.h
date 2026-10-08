@@ -66,7 +66,11 @@ class LinearSOE : public MovableObject
     
     virtual int addA(const Matrix &, const ID &, double fact = 1.0) =0;
     virtual int addB(const Vector &, const ID &, double fact = 1.0) =0;    
-    virtual int setB(const Vector &, double fact = 1.0) =0;        
+    virtual int setB(const Vector &, double fact = 1.0) =0;
+    // localOnly=true: set this rank's RHS only (no collective semantics change for
+    // most SOEs; for MumpsParallel setB is already local). Prefer this overload
+    // over setB(v, double) when restoring a snapshot from getB(true).
+    virtual int setB(const Vector &v, bool localOnly);
 
     virtual int addA(const Matrix &);
     virtual int addColA(const Vector &col, int colIndex, double fact = 1.0);
@@ -77,7 +81,10 @@ class LinearSOE : public MovableObject
     virtual int formAp(const Vector &p, Vector &Ap);
 
     virtual const Vector &getX(void) = 0;
-    virtual const Vector &getB(void) = 0;    
+    virtual const Vector &getB(void) = 0;
+    // localOnly=true: return this rank's RHS without merging across processes
+    // (MumpsParallelSOE skips the channel gather used by getB()).
+    virtual const Vector &getB(bool localOnly);
     virtual const Matrix *getA(void) {return 0;};    
     virtual int saveSparseA(OPS_Stream& output, int baseIndex = 0); 
     virtual int getSparseA(ID& rowIndices, ID& colIndices, Vector& values, int baseIndex = 0);

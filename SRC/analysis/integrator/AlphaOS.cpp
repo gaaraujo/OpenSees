@@ -243,8 +243,8 @@ int AlphaOS::formEleTangent(FE_Element *theEle)
     else if (statusFlag == INITIAL_TANGENT)
         theEle->addKiToTang(alpha*c1);
     else if (statusFlag == HALL_TANGENT)  {
-        theEle->addKtToTang(alpha*c1*cFactor);
-        theEle->addKiToTang(alpha*c1*iFactor);
+        theEle->addKtToTang(alpha*c1*curFactor);
+        theEle->addKiToTang(alpha*c1*initFactor);
     }
     
     theEle->addCtoTang(alpha*c2);

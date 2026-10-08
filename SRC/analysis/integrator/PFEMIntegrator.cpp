@@ -354,7 +354,7 @@ PFEMIntegrator::formTangent(int statFlag)
 
     theLinSOE->zeroA();
 
-    // do modal damping
+    // do modal damping (legacy incl-matrix tangent)
     bool inclModalMatrix=theModel->inclModalDampingMatrix();
     if (inclModalMatrix == true) {
         const Vector *modalValues = theModel->getModalDampingFactors();
@@ -384,6 +384,16 @@ PFEMIntegrator::formTangent(int statFlag)
             result = -2;
         }
     }
+
+    if (theModel->getModalDampingOption() == MODAL_DAMPING_WOODBURY) {
+        const Vector *modalValues = theModel->getModalDampingFactors();
+        if (modalValues != 0) {
+            int wb = this->addModalDampingWoodbury(modalValues);
+            if (wb < 0)
+                result = wb;
+        }
+    }
+
     return result;
 }
 
