@@ -55,6 +55,11 @@ public:
     ~PDeltaCrdTransf2d();
     
     const char *getClassType() const {return "PDeltaCrdTransf2d";};
+
+    // PDelta02: include the variation of the axial force in the geometric stiffness,
+    // (ul14/L) dN/du, so that the tangent is consistent with the P-Delta resisting force
+    // (the resulting tangent is unsymmetric)
+    void setConsistentTangent(bool flag) {consistentTangent = flag;}
     
     int initialize(Node *node1Pointer, Node *node2Pointer);
     int update(void);
@@ -105,6 +110,7 @@ private:
     double cosTheta, sinTheta;  // direction cosines of undeformed element wrt to global system 
     double L;     // undeformed element length
     double ul14;  // Transverse local displacement offset of P-Delta
+    bool consistentTangent;  // PDelta02
     
     static Matrix Tlg;  // matrix that transforms from global to local coordinates
     static Matrix kg;   // global stiffness matrix

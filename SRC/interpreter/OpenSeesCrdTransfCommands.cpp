@@ -84,6 +84,10 @@ int OPS_CrdTransf()
     	transf = (CrdTransf*)OPS_LinearCrdTransf();
     } else if(strcmp(type, "PDelta") == 0) {
     	transf = (CrdTransf*)OPS_PDeltaCrdTransf();
+    } else if(strcmp(type, "PDelta02") == 0) {
+    	transf = (CrdTransf*)OPS_PDeltaCrdTransf();
+    	PDeltaCrdTransf2d *pd = dynamic_cast<PDeltaCrdTransf2d*>(transf);
+    	if (pd != 0) pd->setConsistentTangent(true);
     } else if(strcmp(type, "Corotational") == 0) {
     	transf = (CrdTransf*)OPS_CorotCrdTransf();
     } else {

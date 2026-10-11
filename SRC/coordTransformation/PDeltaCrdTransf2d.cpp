@@ -81,7 +81,7 @@ PDeltaCrdTransf2d::PDeltaCrdTransf2d(int tag)
 nodeIPtr(0), nodeJPtr(0),
 nodeIOffset(0), nodeJOffset(0),
 cosTheta(0), sinTheta(0), L(0), ul14(0),
-nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false)
+nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false), consistentTangent(false)
 {
     // Does nothing
 }
@@ -95,7 +95,7 @@ PDeltaCrdTransf2d::PDeltaCrdTransf2d(int tag,
    nodeIPtr(0), nodeJPtr(0),
    nodeIOffset(0), nodeJOffset(0),
    cosTheta(0), sinTheta(0), L(0), ul14(0),
-   nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false)
+   nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false), consistentTangent(false)
 {
     // check rigid joint offset for node I
     if (rigJntOffset1.Size() != 2 ) {
@@ -128,7 +128,7 @@ PDeltaCrdTransf2d::PDeltaCrdTransf2d()
 nodeIPtr(0), nodeJPtr(0),
 nodeIOffset(0), nodeJOffset(0),
 cosTheta(0), sinTheta(0), L(0), ul14(0),
-nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false)
+nodeIInitialDisp(0), nodeJInitialDisp(0), initialDispChecked(false), consistentTangent(false)
 {
     
 }
@@ -691,6 +691,19 @@ PDeltaCrdTransf2d::getGlobalStiffMatrix(const Matrix &kb, const Vector &pb)
     kl[4][4] += NoverL;
     kl[1][4] -= NoverL;
     kl[4][1] -= NoverL;
+
+    // PDelta02: the P-Delta shear ul14*N/L also varies with the axial force N, whose
+    // derivative with respect to the local displacements is row 3 of the basic part of kl
+    if (consistentTangent) {
+        double ulOverL = ul14*oneOverL;
+        double dNdu[6];
+        for (int a = 0; a < 6; a++)
+            dNdu[a] = kl[3][a];
+        for (int a = 0; a < 6; a++) {
+            kl[1][a] += ulOverL*dNdu[a];
+            kl[4][a] -= ulOverL*dNdu[a];
+        }
+    }
     
     double t02 = 0.0;
     double t12 = 0.0;
@@ -986,6 +999,7 @@ PDeltaCrdTransf2d::getCopy2d(void)
     theCopy->sinTheta = sinTheta;
     theCopy->L = L;
     theCopy->ul14 = ul14;
+    theCopy->consistentTangent = consistentTangent;
     
     return theCopy;
 }
@@ -996,7 +1010,7 @@ PDeltaCrdTransf2d::sendSelf(int cTag, Channel &theChannel)
 {
     int res = 0;
     
-    static Vector data(12);
+    static Vector data(13);
     data(0) = this->getTag();
     data(1) = L;
     if (nodeIOffset != 0) {
@@ -1034,6 +1048,7 @@ PDeltaCrdTransf2d::sendSelf(int cTag, Channel &theChannel)
         data(10) = 0.0;
         data(11) = 0.0;
     }
+    data(12) = consistentTangent ? 1.0 : 0.0;
     
     res += theChannel.sendVector(this->getDbTag(), cTag, data);
     if (res < 0) {
@@ -1050,7 +1065,7 @@ PDeltaCrdTransf2d::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &the
 {
     int res = 0;
     
-    static Vector data(12);
+    static Vector data(13);
     
     res += theChannel.recvVector(this->getDbTag(), cTag, data);
     if (res < 0) {
@@ -1062,6 +1077,7 @@ PDeltaCrdTransf2d::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &the
     
     this->setTag((int)data(0));
     L = data(1);
+    consistentTangent = (data(12) != 0.0);
     data(0) = this->getTag();
     data(1) = L;
     

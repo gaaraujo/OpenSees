@@ -120,6 +120,12 @@ TclCommand_addGeomTransf(ClientData clientData, Tcl_Interp *interp,
     else if (strcmp(argv[1],"PDelta") == 0 || strcmp(argv[1],"LinearWithPDelta") == 0)
       crdTransf2d = new PDeltaCrdTransf2d(crdTransfTag, jntOffsetI, jntOffsetJ);
 
+    else if (strcmp(argv[1],"PDelta02") == 0) {
+      PDeltaCrdTransf2d *pd = new PDeltaCrdTransf2d(crdTransfTag, jntOffsetI, jntOffsetJ);
+      pd->setConsistentTangent(true);
+      crdTransf2d = pd;
+    }
+
     else if (strcmp(argv[1],"Corotational") == 0 && NDF == 3)
       crdTransf2d = new CorotCrdTransf2d(crdTransfTag, jntOffsetI, jntOffsetJ);
 
