@@ -222,7 +222,9 @@ int AlphaOSGeneralized::newStep(double _deltaT)
 const Vector &
 AlphaOSGeneralized::getVel()
 {
-  return *Udot;
+  // velocity at which the equation of motion is evaluated (t + alphaF*deltaT),
+  // the same trial velocity set at the nodes for element and Rayleigh damping
+  return *Ualphadot;
 }
 
 int AlphaOSGeneralized::revertToLastStep()

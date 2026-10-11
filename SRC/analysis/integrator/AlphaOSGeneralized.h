@@ -66,7 +66,9 @@ public:
     int commit(void);
 
     const Vector &getVel(void);
-    
+    // coefficient of C in the coefficient matrix (used by modal damping, -legacy and -woodbury)
+    double getCFactor(void) { return alphaF*c2; }
+
     virtual int sendSelf(int commitTag, Channel &theChannel);
     virtual int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);
     
