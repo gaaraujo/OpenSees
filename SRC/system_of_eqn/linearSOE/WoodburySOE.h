@@ -92,6 +92,10 @@ class WoodburySOE : public LinearSOE
     int solve(void) override;
     LinearSOESolver *getSolver(void);
 
+    // Copy for integrators that clone the analysis SOE (e.g., MKRAlphaExplicitMultiSOE): wraps a copy of
+    // the inner SOE, which the copy owns; the low-rank data are rebuilt by the integrator for each operator.
+    LinearSOE *getCopy(void) const override;
+
     int addColA(const Vector &col, int colIndex, double fact = 1.0) override;
 
     int saveSparseA(OPS_Stream &output, int baseIndex = 0) override;
@@ -137,6 +141,7 @@ class WoodburySOE : public LinearSOE
     Matrix *lowRankG;
     Vector *lowRankWorkV1;
     Vector *lowRankWorkV2;
+    bool ownsInner; // true for copies created by getCopy()
 };
 
 #endif

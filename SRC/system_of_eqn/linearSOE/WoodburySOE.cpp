@@ -58,9 +58,24 @@ WoodburySOE::WoodburySOE(LinearSOE &inner)
       lowRankZ(nullptr),
       lowRankG(nullptr),
       lowRankWorkV1(nullptr),
-      lowRankWorkV2(nullptr)
+      lowRankWorkV2(nullptr),
+      ownsInner(false)
 {
     hookWoodburySolver();
+}
+
+LinearSOE *
+WoodburySOE::getCopy(void) const
+{
+    if (innerSOE == nullptr)
+        return nullptr;
+    LinearSOE *innerCopy = innerSOE->getCopy();
+    if (innerCopy == nullptr)
+        return nullptr;   // inner SOE must implement getCopy (ProfileSPD, MUMPS, CUDA)
+    WoodburySOE *theCopy = new WoodburySOE(*innerCopy);
+    theCopy->ownsInner = true;
+    theCopy->processID = processID;
+    return theCopy;
 }
 
 int
@@ -125,6 +140,10 @@ WoodburySOE::~WoodburySOE()
     if (theChannels != nullptr) {
         delete[] theChannels;
         theChannels = nullptr;
+    }
+    if (ownsInner && innerSOE != nullptr) {
+        delete innerSOE;
+        innerSOE = nullptr;
     }
 }
 
