@@ -254,6 +254,17 @@ const Matrix & FluidSolidPorousMaterial::getInitialTangent (void)
   
 	*workM = theSoilMaterial->getInitialTangent();
 
+	// Include the pore-fluid bulk modulus once the material is in a fluid-solid stage, as
+	// getTangent and getStress do. Without it, integrators built on the initial tangent (the
+	// model-based explicit-alpha family, initial-stiffness Rayleigh, -initial Newton variants)
+	// miss the dominant volumetric stiffness.
+	if (loadStagex[matN] != 0) {
+		double combinedBulkModulus = combinedBulkModulusx[matN];
+		for (int i=0; i<ndm; i++)
+			for (int j=0; j<ndm; j++)
+				(*workM)(i,j) = (*workM)(i,j) + combinedBulkModulus;
+	}
+
 	return *workM;
 }
 
