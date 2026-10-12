@@ -51,6 +51,8 @@ public:
     struct Options {
         bool incrementalAccel = false;   // solve returns Delta Uddot instead of total Uddot
         bool useAlphaCloseCheck = false; // enable alphaM ~= alphaF shortcut when |alphaM-alphaF| small
+        bool order2 = false;             // -order2 / -order2NoTaper second-order corrections
+        bool order2Taper = true;
     };
 
     CudaExplicitAlpha_TP();
@@ -88,6 +90,17 @@ protected:
     double gamma;
     bool incrementalAccel;
     bool useAlphaCloseCheck;
+    /** -order2: as CudaExplicitAlpha; both force ends use v + dv (the n end through the committed
+     *  reported velocity), nodal damping and getVel follow Vforce, and C_int*dv is added to Put. */
+    bool order2;
+    bool order2Taper;
+    bool startPending;
+    Vector *Vrep;    // reported (committed) velocity
+    Vector *Vforce;  // velocity at the current force end
+    Vector *dVres;   // dv (host)
+    Vector *A1host;  // alpha1 * accel (host)
+
+    int applyOrder2Start(CudaBcsrLinSOE *cudaSOE);
 
     int updateCount;
     double c1, c2, c3;
