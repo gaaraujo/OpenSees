@@ -32,6 +32,7 @@
 #include <FEM_ObjectBroker.h>
 #include <elementAPI.h>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #define OPS_Export
 
@@ -508,6 +509,18 @@ int ExplicitAlpha::applyOrder2Start()
 
     // Zero trial acceleration, so the residual is p - C v0 - f and a0 = M^{-1} R0 directly.
     Udotdot->Zero();
+    // Elements that update from the trial-displacement increment (forceBeamColumn) skip their update
+    // when the increment is zero, so after setNodeDisp -commit they still hold the previous state and
+    // R0 would miss the imposed displacement. A tiny non-committing trial excursion makes them iterate
+    // to the committed configuration before R0 is formed.
+    {
+        Vector Up(*U);
+        for (int i = 0; i < Up.Size(); i++)
+            Up(i) += 1.0e-9 * (1.0 + fabs(Up(i)));
+        theModel->setResponse(Up, *Udot, *Udotdot);
+        if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
+            return -2;
+    }
     theModel->setResponse(*U, *Udot, *Udotdot);
     if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
         return -2;
@@ -517,6 +530,8 @@ int ExplicitAlpha::applyOrder2Start()
     Vector R0(theLinSOE->getB());
     if (Mmat->Solve(R0, *Udotdot) < 0)
         return -4;
+    if (getenv("OPS_ORDER2_VERBOSE") != 0)
+        opserr << "ExplicitAlpha -order2 start: |R0| = " << R0.Norm() << "  |a0| = " << Udotdot->Norm() << endln;
 
     Utdothat->addMatrixVector(0.0, *alpha1, *Udotdot, 1.0);
     Udot->addVector(1.0, *Utdothat, -gamma * deltaT);

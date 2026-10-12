@@ -553,6 +553,18 @@ ExplicitAlphaMultiSOE::applyOrder2Start()
         return -1;
 
     Udotdot->Zero();
+    // Elements that update from the trial-displacement increment (forceBeamColumn) skip their update
+    // when the increment is zero, so after setNodeDisp -commit they still hold the previous state and
+    // R0 would miss the imposed displacement. A tiny non-committing trial excursion makes them iterate
+    // to the committed configuration before R0 is formed.
+    {
+        Vector Up(*U);
+        for (int i = 0; i < Up.Size(); i++)
+            Up(i) += 1.0e-9 * (1.0 + fabs(Up(i)));
+        theModel->setResponse(Up, *Udot, *Udotdot);
+        if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
+            return -2;
+    }
     theModel->setResponse(*U, *Udot, *Udotdot);
     if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
         return -2;
