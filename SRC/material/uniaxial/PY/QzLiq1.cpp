@@ -183,11 +183,10 @@ QzLiq1::setTrialStrain (double newz, double zRate)
 			meanStress = getEffectiveStress(theSeries);
 		else
 			meanStress = getEffectiveStress();
-		// Stresses are compression-negative when read from the solid elements: the original
-		// "meanStress > meanConsolStress" reset every softened (ru > 0) state to ru = 0. Compare
-		// magnitudes so that only a state more confined than at consolidation is capped.
-		if(fabs(meanStress) > fabs(meanConsolStress))
-			meanStress=meanConsolStress;
+		// No clamp on meanStress: only the ratio matters. Tru < 0 (more confined than at
+		// consolidation) is clamped to 0 below, and tension (ratio < 0) or liquefaction gives Tru at
+		// the upper cap. The former "if (meanStress > meanConsolStress) meanStress = meanConsolStress"
+		// reset every softened state to ru = 0 for the compression-negative element stresses.
 		Tru = 1.0 - meanStress/meanConsolStress;
 		if(Tru > 0.999) Tru = 0.999;
 		if(Tru < 0) Tru = 0;
