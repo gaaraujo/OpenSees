@@ -32,7 +32,7 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     ExplicitAlphaMultiSOE();
     ExplicitAlphaMultiSOE(double alphaF, double alphaM, double gamma, double beta,
                            bool updElemDisp = false, bool incrementalAccel = false,
-                           bool useAlphaCloseCheck = false);
+                           bool useAlphaCloseCheck = false, bool order2 = false);
     ~ExplicitAlphaMultiSOE() override;
 
     int formTangent(int statFlag) override;
@@ -61,7 +61,8 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
 
   protected:
     ExplicitAlphaMultiSOE(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                        bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck);
+                        bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck,
+                        bool order2 = false);
 
     double alphaM;
     double alphaF;
@@ -72,6 +73,17 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
     bool useAlphaCloseCheck;
+    /** -order2: equilibrium start with v_alg0 = v0 - gamma*dt*alpha1*a0, resisting force at
+     *  v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the residual, reported
+     *  v_n = v_alg + gamma*dt*a_alg. */
+    bool order2;
+    /** True until the -order2 starting correction has been applied. */
+    bool startPending;
+    /** Workspace SOE holding C_int (the C in alpha); only used through formAp. */
+    LinearSOE *soeC;
+    Vector *Vrep;
+
+    int applyOrder2Start(void);
 
     int updateCount;
     double c1, c2, c3;

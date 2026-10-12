@@ -40,6 +40,7 @@ public:
         bool updElemDisp = false;
         bool incrementalAccel = false;
         bool useAlphaCloseCheck = false;
+        bool order2 = false;
     };
 
     CudaExplicitAlpha();
@@ -76,6 +77,14 @@ protected:
     bool updElemDisp;
     bool incrementalAccel;
     bool useAlphaCloseCheck;
+    /** -order2: equilibrium start with v_alg0 = v0 - gamma*dt*alpha1*a0, resisting force at
+     *  v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the residual on the GPU,
+     *  reported v_n = v_alg + gamma*dt*a_alg. */
+    bool order2;
+    bool startPending;  // -order2 starting correction not yet applied
+    Vector *Vrep;       // reported velocity (-order2)
+
+    int applyOrder2Start(CudaBcsrLinSOE *cudaSOE);
 
     int updateCount;
     double c1, c2, c3;

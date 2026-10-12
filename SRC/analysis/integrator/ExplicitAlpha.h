@@ -54,7 +54,7 @@ public:
     ExplicitAlpha();
     ExplicitAlpha(double alphaF, double alphaM, double gamma, double beta,
                   bool updElemDisp = false, bool incrementalAccel = false,
-                  bool useAlphaCloseCheck = false);
+                  bool useAlphaCloseCheck = false, bool order2 = false);
 
     virtual ~ExplicitAlpha();
 
@@ -62,6 +62,7 @@ public:
 
     int formEleTangent(FE_Element *theEle);
     int formNodTangent(DOF_Group *theDof);
+    int formUnbalance(void);
 
     int domainChanged(void);
     int newStep(double deltaT);
@@ -81,7 +82,7 @@ public:
 
 protected:
     ExplicitAlpha(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck);
+                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck, bool order2);
 
     double alphaM;
     double alphaF;
@@ -102,6 +103,13 @@ protected:
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
     bool useAlphaCloseCheck;
+    /** If true (-order2), apply the second-order corrections: start from the equilibrium
+     *  acceleration with the algorithmic velocity shifted by -gamma*dt*alpha1*a0, evaluate the
+     *  resisting force at v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the
+     *  residual, and report v_n = v_alg + gamma*dt*a_alg (a_n stays the algorithmic value). */
+    bool order2;
+    /** True until the -order2 starting correction has been applied. */
+    bool startPending;
     double deltaT;
 
     Matrix *alpha1;
@@ -115,6 +123,12 @@ protected:
     Vector *U, *Udot, *Udotdot;
     Vector *Ualpha, *Ualphadot, *Ualphadotdot;
     Vector *Utdothat;
+    Matrix *Mmat;  // mass matrix (-order2 start)
+    Matrix *Cint;  // integrator damping C_int, the C in alpha (-order2 force correction)
+    Vector *Vrep;  // reported velocity (-order2)
+    Vector *work;  // work vector (-order2)
+
+    int applyOrder2Start(void);
 };
 
 void *OPS_ExplicitAlpha(void);
