@@ -53,7 +53,7 @@ class ExplicitAlpha_TP : public TransientIntegrator
 public:
     ExplicitAlpha_TP();
     ExplicitAlpha_TP(double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel = false, bool useAlphaCloseCheck = false);
+                     bool incrementalAccel = false, bool useAlphaCloseCheck = false, int order2 = 0);
 
     virtual ~ExplicitAlpha_TP();
 
@@ -84,7 +84,7 @@ public:
 
 protected:
     ExplicitAlpha_TP(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel, bool useAlphaCloseCheck);
+                     bool incrementalAccel, bool useAlphaCloseCheck, int order2 = 0);
 
     double alphaM;
     double alphaF;
@@ -117,6 +117,21 @@ protected:
     Vector *U, *Udot, *Udotdot;
     Vector *Utdothat;
     Vector *Put;
+
+    /** -order2 (tapered, default) / -order2NoTaper: same corrections as ExplicitAlpha. Both force
+     *  ends use the velocity shifted by dv = gamma*dt*alpha1*a_n (or gamma*dt*a_n); the n end gets it
+     *  by committing the reported velocity v_alg + dv at the previous step. */
+    bool order2;
+    bool order2Taper;
+    bool startPending;
+    Matrix *Mmat;
+    Matrix *Cint;
+    Vector *dVres;   // velocity shift dv
+    Vector *Vforce;  // velocity handed to nodal damping / getVel at the current force end
+    Vector *Vrep;    // reported (and committed) velocity
+    Vector *work;
+
+    int applyOrder2Start(void);
 };
 
 void *OPS_ExplicitAlpha_TP(void);
