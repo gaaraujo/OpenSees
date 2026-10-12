@@ -218,7 +218,10 @@ PyLiq1::setTrialStrain (double newy, double yRate)
 			meanStress = getEffectiveStress(theSeries);
 		else
 			meanStress = getEffectiveStress();
-		if(meanStress>meanConsolStress)
+		// Stresses are compression-negative when read from the solid elements: the original
+		// "meanStress > meanConsolStress" reset every softened (ru > 0) state to ru = 0. Compare
+		// magnitudes so that only a state more confined than at consolidation is capped.
+		if(fabs(meanStress) > fabs(meanConsolStress))
 			meanStress=meanConsolStress;
 		Tru = 1.0 - meanStress/meanConsolStress;
 		if(Tru > 1.0-pRes/PySimple1::pult) Tru = 1.0-pRes/PySimple1::pult;
