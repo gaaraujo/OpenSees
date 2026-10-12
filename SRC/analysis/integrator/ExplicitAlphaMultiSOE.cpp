@@ -10,6 +10,7 @@
 #include <FE_Element.h>
 #include <LinearSOE.h>
 #include <AnalysisModel.h>
+#include <Domain.h>
 #include <Vector.h>
 #include <DOF_Group.h>
 #include <DOF_GrpIter.h>
@@ -581,6 +582,19 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
     // Equilibrium evaluated at t + alphaF*dt (intermediate time level).
     double time = theModel->getCurrentDomainTime();
     time += alphaF * deltaT;
+    // Domain::update(newTime, dT) ignores dT: it sets ops_Dt = newTime - committedTime = alphaF*dt,
+    // while element states were committed at the previous alpha level, a full dt earlier. Materials
+    // that integrate over ops_Dt (ViscousDamper, Maxwell-type dampers, TDConcrete, friction
+    // bearings, ...) then run on a slowed clock. Shift the domain's committed time so ops_Dt = dt
+    // at the alpha-level evaluation (Domain::commit resets it; revertToLastStep restores it).
+    // -updateElemDisp commits at t_{n+1}, so ops_Dt = alphaF*dt is already right there.
+    if (!updElemDisp) {
+        Domain *theDomain = theModel->getDomainPtr();
+        if (theDomain != 0) {
+            tStepStart = time - alphaF * deltaT;
+            theDomain->setCommittedTime(time - deltaT);
+        }
+    }
     if (theModel->updateDomain(time, deltaT) < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::newStep() - updateDomain failed\n";
         return -9;
@@ -593,6 +607,15 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
 int
 ExplicitAlphaMultiSOE::revertToLastStep()
 {
+    // undo the committed-time shift of newStep (Domain::revertToLastCommit used the shifted time)
+    if (tStepStart >= 0.0) {
+        AnalysisModel *theModel = this->getAnalysisModel();
+        Domain *theDomain = theModel ? theModel->getDomainPtr() : 0;
+        if (theDomain != 0) {
+            theDomain->setCurrentTime(tStepStart);
+            theDomain->setCommittedTime(tStepStart);
+        }
+    }
     if (Ut != nullptr) {
         (*U) = *Ut;
         (*Udot) = *Utdot;

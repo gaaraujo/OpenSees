@@ -102,6 +102,7 @@ protected:
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
     bool useAlphaCloseCheck;
+    double tStepStart = -1.0;  // domain time at the start of the step (committed-time shift for ops_Dt)
     double deltaT;
 
     Matrix *alpha1;
