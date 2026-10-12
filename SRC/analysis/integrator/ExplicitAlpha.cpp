@@ -494,7 +494,8 @@ int ExplicitAlpha::newStep(double _deltaT)
     // while element states were committed at the previous alpha level, a full dt earlier. Materials
     // that integrate over ops_Dt (e.g. ViscousDamper) then run on a slowed clock. Shift the domain's
     // committed time so ops_Dt = dt at the alpha-level evaluation (Domain::commit resets it).
-    {
+    // (-updateElemDisp commits at t_{n+1}, so ops_Dt = alphaF*dt is already right there.)
+    if (!updElemDisp) {
         Domain *theDomain = theModel->getDomainPtr();
         if (theDomain != 0) {
             tStepStart = time - alphaF * deltaT;
