@@ -131,6 +131,7 @@ protected:
     Vector *Vrep;  // reported velocity (-order2)
     Vector *work;  // work vector (-order2)
     Vector *dVres; // velocity shift of the resisting-force argument (-order2)
+    double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
 
     int applyOrder2Start(void);
 };

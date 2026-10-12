@@ -10,6 +10,7 @@
 #include <FE_Element.h>
 #include <LinearSOE.h>
 #include <AnalysisModel.h>
+#include <Domain.h>
 #include <Vector.h>
 #include <DOF_Group.h>
 #include <DOF_GrpIter.h>
@@ -206,6 +207,7 @@ ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE(int classTag, double _alphaF, doubl
       dVres(nullptr),
       A1next(nullptr),
       a1Valid(false),
+      tStepStart(-1.0),
       deltaT(0.0),
       soeM(nullptr),
       soeAlpha(nullptr),
@@ -696,6 +698,14 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
     // Equilibrium evaluated at t + alphaF*dt (intermediate time level).
     double time = theModel->getCurrentDomainTime();
     time += alphaF * deltaT;
+    // Domain::update(newTime, dT) ignores dT: it sets ops_Dt = newTime - committedTime = alphaF*dt,
+    // while element states were committed at the previous alpha level, a full dt earlier. Materials
+    // that integrate over ops_Dt (e.g. ViscousDamper) then run on a slowed clock. Shift the domain's
+    // committed time so ops_Dt = dt at the alpha-level evaluation (Domain::commit resets it).
+    if (Domain *theDomain = theModel->getDomainPtr()) {
+        tStepStart = time - alphaF * deltaT;
+        theDomain->setCommittedTime(time - deltaT);
+    }
     if (theModel->updateDomain(time, deltaT) < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::newStep() - updateDomain failed\n";
         return -9;
@@ -708,6 +718,13 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
 int
 ExplicitAlphaMultiSOE::revertToLastStep()
 {
+    // undo the committed-time shift of newStep (Domain::revertToLastCommit used the shifted time)
+    if (tStepStart >= 0.0) {
+        if (Domain *theDomain = this->getAnalysisModel() ? this->getAnalysisModel()->getDomainPtr() : 0) {
+            theDomain->setCurrentTime(tStepStart);
+            theDomain->setCommittedTime(tStepStart);
+        }
+    }
     a1Valid = false;
     if (Ut != nullptr) {
         (*U) = *Ut;

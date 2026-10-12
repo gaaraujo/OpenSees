@@ -88,6 +88,7 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     Vector *dVres;   // velocity shift of the resisting-force argument
     Vector *A1next;  // alpha1*a_{n+1} from the reported velocity, reused by the next predictor
     bool a1Valid;
+    double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
 
     int applyOrder2Start(void);
 

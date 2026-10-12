@@ -926,6 +926,7 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       startPending(true),
       Vrep(new Vector(0)),
       A1host(new Vector(0)),
+      tStepStart(-1.0),
       updateCount(0),
       c1(0.0),
       c2(0.0),
@@ -1296,6 +1297,14 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     }
 
     theModel->setResponse(*Ualpha, *Ualphadot, *Ualphadotdot);
+    // Domain::update(newTime, dT) ignores dT: it sets ops_Dt = newTime - committedTime = alphaF*dt,
+    // while element states were committed at the previous alpha level, a full dt earlier. Materials
+    // that integrate over ops_Dt (e.g. ViscousDamper) then run on a slowed clock. Shift the domain's
+    // committed time so ops_Dt = dt at the alpha-level evaluation (Domain::commit resets it).
+    if (Domain *theDomain = theModel->getDomainPtr()) {
+        tStepStart = theModel->getCurrentDomainTime();
+        theDomain->setCommittedTime(tStepStart + alphaF * deltaT - deltaT);
+    }
     if (theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT) < 0) {
         opserr << "ERROR CudaExplicitAlpha::newStep() - updateDomain failed at t="
                << theModel->getCurrentDomainTime()
@@ -1458,6 +1467,13 @@ int CudaExplicitAlpha::commit()
 
 int CudaExplicitAlpha::revertToLastStep()
 {
+    // undo the committed-time shift of newStep (Domain::revertToLastCommit used the shifted time)
+    if (tStepStart >= 0.0) {
+        if (Domain *theDomain = this->getAnalysisModel() ? this->getAnalysisModel()->getDomainPtr() : 0) {
+            theDomain->setCurrentTime(tStepStart);
+            theDomain->setCommittedTime(tStepStart);
+        }
+    }
     CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) == 0) {
         cudaSOE->setXSyncMode(true);

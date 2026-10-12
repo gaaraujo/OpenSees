@@ -25,6 +25,7 @@
 #include "fullGEN/FullGenLinSOE.h"
 #include "fullGEN/FullGenLinLapackSolver.h"
 #include <AnalysisModel.h>
+#include <Domain.h>
 #include <Vector.h>
 #include <DOF_Group.h>
 #include <DOF_GrpIter.h>
@@ -218,7 +219,7 @@ ExplicitAlpha::ExplicitAlpha(int classTag, double _alphaF, double _alphaM, doubl
       U(0), Udot(0), Udotdot(0),
       Ualpha(0), Ualphadot(0), Ualphadotdot(0),
       Utdothat(0),
-      Mmat(0), Cint(0), Vrep(0), work(0), dVres(0)
+      Mmat(0), Cint(0), Vrep(0), work(0), dVres(0), tStepStart(-1.0)
 {
 }
 
@@ -489,6 +490,17 @@ int ExplicitAlpha::newStep(double _deltaT)
 
     double time = theModel->getCurrentDomainTime();
     time += alphaF * deltaT;
+    // Domain::update(newTime, dT) ignores dT: it sets ops_Dt = newTime - committedTime = alphaF*dt,
+    // while element states were committed at the previous alpha level, a full dt earlier. Materials
+    // that integrate over ops_Dt (e.g. ViscousDamper) then run on a slowed clock. Shift the domain's
+    // committed time so ops_Dt = dt at the alpha-level evaluation (Domain::commit resets it).
+    {
+        Domain *theDomain = theModel->getDomainPtr();
+        if (theDomain != 0) {
+            tStepStart = time - alphaF * deltaT;
+            theDomain->setCommittedTime(time - deltaT);
+        }
+    }
     if (theModel->updateDomain(time, deltaT) < 0) {
         opserr << "WARNING ExplicitAlpha::newStep() - failed to update the domain\n";
         return -7;
@@ -562,6 +574,13 @@ int ExplicitAlpha::formUnbalance()
 
 int ExplicitAlpha::revertToLastStep()
 {
+    // undo the committed-time shift of newStep (Domain::revertToLastCommit used the shifted time)
+    if (tStepStart >= 0.0) {
+        if (Domain *theDomain = this->getAnalysisModel() ? this->getAnalysisModel()->getDomainPtr() : 0) {
+            theDomain->setCurrentTime(tStepStart);
+            theDomain->setCommittedTime(tStepStart);
+        }
+    }
     if (U != 0) {
         (*U) = *Ut;
         (*Udot) = *Utdot;

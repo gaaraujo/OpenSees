@@ -86,6 +86,7 @@ protected:
     bool startPending;  // -order2 starting correction not yet applied
     Vector *Vrep;       // reported velocity (-order2)
     Vector *A1host;     // alpha1*a_{n+1} on the host (-order2 tapered reporting)
+    double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
 
     int applyOrder2Start(CudaBcsrLinSOE *cudaSOE);
 
