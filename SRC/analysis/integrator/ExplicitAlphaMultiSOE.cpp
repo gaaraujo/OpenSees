@@ -20,12 +20,12 @@
 namespace {
 
 bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
-                                       bool &order2)
+                                       int &order2)
 {
     updElemDisp = false;
     incrementalAccel = false;
     useAlphaCloseCheck = false;
-    order2 = false;
+    order2 = 0;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -38,10 +38,13 @@ bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel
         } else if (strcmp(argvLoc, "-alphaCloseCheck") == 0) {
             useAlphaCloseCheck = true;
         } else if (strcmp(argvLoc, "-order2") == 0) {
-            order2 = true;
+            if (order2 == 0)
+                order2 = 1;  // tapered corrections (default)
+        } else if (strcmp(argvLoc, "-order2NoTaper") == 0) {
+            order2 = 2;      // untapered corrections, as written in the note
         } else {
             opserr << "WARNING ExplicitAlphaMultiSOE family - unknown flag " << argvLoc
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-order2NoTaper>\n";
             return false;
         }
     }
@@ -95,7 +98,7 @@ OPS_ExplicitAlphaMultiSOE(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaMultiSOEOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return nullptr;
     }
@@ -135,7 +138,7 @@ OPS_KRAlphaExplicitMultiSOE(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaMultiSOEOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return nullptr;
     }
@@ -174,7 +177,7 @@ OPS_MKRAlphaExplicitMultiSOE(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaMultiSOEOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return nullptr;
     }
@@ -186,7 +189,7 @@ OPS_MKRAlphaExplicitMultiSOE(void)
 
 ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE(int classTag, double _alphaF, double _alphaM, double _gamma,
                                            double _beta, bool _updElemDisp, bool _incrementalAccel,
-                                           bool _useAlphaCloseCheck, bool _order2)
+                                           bool _useAlphaCloseCheck, int _order2)
     : TransientIntegrator(classTag),
       alphaM(_alphaM),
       alphaF(_alphaF),
@@ -195,10 +198,14 @@ ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE(int classTag, double _alphaF, doubl
       updElemDisp(_updElemDisp),
       incrementalAccel(_incrementalAccel),
       useAlphaCloseCheck(_useAlphaCloseCheck),
-      order2(_order2),
+      order2(_order2 > 0),
+      order2Taper(_order2 == 1),
       startPending(true),
       soeC(nullptr),
       Vrep(nullptr),
+      dVres(nullptr),
+      A1next(nullptr),
+      a1Valid(false),
       deltaT(0.0),
       soeM(nullptr),
       soeAlpha(nullptr),
@@ -235,7 +242,7 @@ ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE()
 
 ExplicitAlphaMultiSOE::ExplicitAlphaMultiSOE(double _alphaF, double _alphaM, double _gamma, double _beta,
                                             bool _updElemDisp, bool _incrementalAccel, bool _useAlphaCloseCheck,
-                                            bool _order2)
+                                            int _order2)
     : ExplicitAlphaMultiSOE(INTEGRATOR_TAGS_ExplicitAlphaMultiSOE, _alphaF, _alphaM, _gamma, _beta, _updElemDisp,
                             _incrementalAccel, _useAlphaCloseCheck, _order2)
 {
@@ -261,6 +268,8 @@ ExplicitAlphaMultiSOE::~ExplicitAlphaMultiSOE()
     delete w2;
     delete w3;
     delete Vrep;
+    delete dVres;
+    delete A1next;
 }
 
 
@@ -487,8 +496,13 @@ ExplicitAlphaMultiSOE::domainChanged()
 
     if (order2 && (Vrep == nullptr || Vrep->Size() != size)) {
         delete Vrep;
+        delete dVres;
+        delete A1next;
         Vrep = new Vector(size);
+        dVres = new Vector(size);
+        A1next = new Vector(size);
     }
+    a1Valid = false;
 
     DOF_GrpIter &theDOFs = theModel->getDOFs();
     DOF_Group *dofPtr;
@@ -518,7 +532,8 @@ ExplicitAlphaMultiSOE::domainChanged()
         }
     }
 
-    // -order2 mid-analysis: the domain holds the reported velocity; recover the algorithmic one.
+    // -order2 mid-analysis: the domain holds the reported velocity; recover the algorithmic one
+    // (untapered inverse; the operators are rebuilt below, so alpha1 is not available here).
     if (order2 && !startPending && deltaT > 0.0)
         Udot->addVector(1.0, *Udotdot, -gamma * deltaT);
 
@@ -550,6 +565,10 @@ ExplicitAlphaMultiSOE::applyOrder2Start()
     if (applyAlpha1(*Udotdot, *w3) != 0)
         return -5;
     Udot->addVector(1.0, *w3, -gamma * deltaT);
+    if (order2Taper) {
+        *A1next = *w3;  // reused by the predictor of the first step
+        a1Valid = true;
+    }
     return 0;
 }
 
@@ -587,8 +606,10 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
     const double prevDeltaT = deltaT;
     deltaT = _deltaT;
     // Like ExplicitAlpha when _deltaT != deltaT: operators depend on dt.
-    if (prevDeltaT != deltaT)
+    if (prevDeltaT != deltaT) {
         initWorkspaceOperators = true;
+        a1Valid = false;
+    }
 
     if (this->formTangent(INITIAL_TANGENT) != 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::newStep() - formTangent(INITIAL_TANGENT) failed\n";
@@ -614,11 +635,15 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
     (*Utdot) = *Udot;
     (*Utdotdot) = *Udotdot;
 
-    // Udot_hat = dt * alpha_1 * Uddot_n,   alpha_1 = alpha^{-1} M  (stored in w1 before scaling)
-    if (applyAlpha1(*Utdotdot, *w1) != 0) {
+    // Udot_hat = dt * alpha_1 * Uddot_n,   alpha_1 = alpha^{-1} M  (stored in w1 before scaling).
+    // -order2 (tapered): alpha_1 * Uddot_n was already formed for the reported velocity.
+    if (order2Taper && a1Valid) {
+        *w1 = *A1next;
+    } else if (applyAlpha1(*Utdotdot, *w1) != 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::newStep() - applyAlpha1 failed (formAp / solve)\n";
         return -7;
     }
+    a1Valid = false;
     Utdothat->addVector(0.0, *w1, deltaT);
 
     // U_{n+1} = U_n + dt*Udot_n + dt*(1/2+gamma)*Udot_hat
@@ -636,9 +661,15 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
     // Udot_{n+alphaF} = (1-alphaF)*Udot_n + alphaF*Udot_{n+1}
     *Ualphadot = *Utdot;
     Ualphadot->addVector(1.0 - alphaF, *Udot, alphaF);
-    // -order2: resisting-force velocity argument v_alpha + gamma*dt*a_n (C_int part restored in formUnbalance)
-    if (order2)
-        Ualphadot->addVector(1.0, *Utdotdot, gamma * deltaT);
+    // -order2: resisting-force velocity argument v_alpha + dv, dv = gamma*Udot_hat = gamma*dt*alpha1*a_n
+    // (tapered) or gamma*dt*a_n (-order2NoTaper); the C_int*dv part is restored in formUnbalance.
+    if (order2) {
+        if (order2Taper)
+            dVres->addVector(0.0, *Utdothat, gamma);
+        else
+            dVres->addVector(0.0, *Utdotdot, gamma * deltaT);
+        Ualphadot->addVector(1.0, *dVres, 1.0);
+    }
 
     // Trial accel for inertia in formUnbalance.
     if (incrementalAccel) {
@@ -665,6 +696,7 @@ ExplicitAlphaMultiSOE::newStep(double _deltaT)
 int
 ExplicitAlphaMultiSOE::revertToLastStep()
 {
+    a1Valid = false;
     if (Ut != nullptr) {
         (*U) = *Ut;
         (*Udot) = *Utdot;
@@ -770,9 +802,9 @@ ExplicitAlphaMultiSOE::formUnbalance()
         if (!order2)
             return 0;
         *Phat = soeA->getB();
-        if (applyOperator(soeC, *Utdotdot, *w1) != 0)
+        if (applyOperator(soeC, *dVres, *w1) != 0)
             return -7;
-        Phat->addVector(1.0, *w1, gamma * deltaT);
+        Phat->addVector(1.0, *w1, 1.0);
         if (setGlobalRhs(soeA, *Phat) < 0)
             return -6;
         return 0;
@@ -781,11 +813,11 @@ ExplicitAlphaMultiSOE::formUnbalance()
     // Phat = unbalance from equilibrium at t_n + alphaF*dt (trial Ualpha, Ualphadot, Ualphadotdot from newStep).
     *Phat = soeA->getB();
 
-    // -order2: add back C_int*gamma*dt*a_n, the part of the shifted velocity that alpha already compensates.
+    // -order2: add back C_int*dv, the part of the shifted velocity that alpha already compensates.
     if (order2) {
-        if (applyOperator(soeC, *Utdotdot, *w1) != 0)
+        if (applyOperator(soeC, *dVres, *w1) != 0)
             return -7;
-        Phat->addVector(1.0, *w1, gamma * deltaT);
+        Phat->addVector(1.0, *w1, 1.0);
     }
 
     // Effective equation: A * Uddot_{n+1} = alpha * M^{-1} * Phat
@@ -829,9 +861,17 @@ ExplicitAlphaMultiSOE::update(const Vector &aiPlusOne)
     }
 
     if (order2) {
-        // Report v = v_alg + gamma*dt*a_alg; the alpha-level evaluation stays the committing one.
+        // Report v = v_alg + gamma*dt*alpha1*a_alg (tapered; alpha1*a_alg is reused by the next
+        // predictor) or v_alg + gamma*dt*a_alg; the alpha-level evaluation stays the committing one.
         *Vrep = *Udot;
-        Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
+        if (order2Taper) {
+            if (applyAlpha1(*Udotdot, *A1next) != 0)
+                return -6;
+            a1Valid = true;
+            Vrep->addVector(1.0, *A1next, gamma * deltaT);
+        } else {
+            Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
+        }
         theModel->setVel(*Vrep);
         theModel->setAccel(*Udotdot);
         theModel->setDisp(*U);
@@ -896,7 +936,7 @@ ExplicitAlphaMultiSOE::sendSelf(int cTag, Channel &theChannel)
     data(4) = updElemDisp ? 1.0 : 0.0;
     data(5) = incrementalAccel ? 1.0 : 0.0;
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(7) = order2 ? 1.0 : 0.0;
+    data(7) = order2 ? (order2Taper ? 1.0 : 2.0) : 0.0;
 
     if (theChannel.sendVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::sendSelf() - could not send data\n";
@@ -923,6 +963,8 @@ ExplicitAlphaMultiSOE::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker 
     incrementalAccel = (data(5) > 0.5);
     useAlphaCloseCheck = (data(6) > 0.5);
     order2 = (data(7) > 0.5);
+    order2Taper = (data(7) > 0.5 && data(7) < 1.5);
+    a1Valid = false;
 
     initWorkspaceOperators = true;
     return 0;
@@ -951,7 +993,7 @@ ExplicitAlphaMultiSOE::Print(OPS_Stream &s, int flag)
             s << "  alphaCloseCheck: yes\n";
         else
             s << "  alphaCloseCheck: no\n";
-        s << "  order2: " << (order2 ? "yes" : "no") << endln;
+        s << "  order2: " << (order2 ? (order2Taper ? "yes (tapered)" : "yes (untapered)") : "no") << endln;
     } else
         s << "ExplicitAlphaMultiSOE - no associated AnalysisModel\n";
 }
@@ -973,5 +1015,6 @@ ExplicitAlphaMultiSOE::revertToStart()
     if (Udotdot != nullptr)
         Udotdot->Zero();
     startPending = true;
+    a1Valid = false;
     return 0;
 }

@@ -41,6 +41,7 @@ public:
         bool incrementalAccel = false;
         bool useAlphaCloseCheck = false;
         bool order2 = false;
+        bool order2Taper = true;
     };
 
     CudaExplicitAlpha();
@@ -81,8 +82,10 @@ protected:
      *  v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the residual on the GPU,
      *  reported v_n = v_alg + gamma*dt*a_alg. */
     bool order2;
+    bool order2Taper;   // -order2 (default) tapers dv and the reported correction by alpha1; -order2NoTaper does not
     bool startPending;  // -order2 starting correction not yet applied
     Vector *Vrep;       // reported velocity (-order2)
+    Vector *A1host;     // alpha1*a_{n+1} on the host (-order2 tapered reporting)
 
     int applyOrder2Start(CudaBcsrLinSOE *cudaSOE);
 

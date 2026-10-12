@@ -38,12 +38,12 @@
 namespace {
 
 bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
-                               bool &order2)
+                               int &order2)
 {
     updElemDisp = false;
     incrementalAccel = false;
     useAlphaCloseCheck = false;
-    order2 = false;
+    order2 = 0;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -56,10 +56,13 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
         } else if (strcmp(argvLoc, "-alphaCloseCheck") == 0) {
             useAlphaCloseCheck = true;
         } else if (strcmp(argvLoc, "-order2") == 0) {
-            order2 = true;
+            if (order2 == 0)
+                order2 = 1;  // tapered corrections (default)
+        } else if (strcmp(argvLoc, "-order2NoTaper") == 0) {
+            order2 = 2;      // untapered corrections, as written in the note
         } else {
             opserr << "WARNING ExplicitAlpha family - unknown flag " << argvLoc
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-order2NoTaper>\n";
             return false;
         }
     }
@@ -112,7 +115,7 @@ void *OPS_ExplicitAlpha(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return 0;
     }
@@ -151,7 +154,7 @@ void *OPS_KRAlphaExplicit(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return 0;
     }
@@ -189,7 +192,7 @@ void *OPS_MKRAlphaExplicit(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
+    int order2 = 0;
     if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2)) {
         return 0;
     }
@@ -201,11 +204,12 @@ void *OPS_MKRAlphaExplicit(void)
 
 ExplicitAlpha::ExplicitAlpha(int classTag, double _alphaF, double _alphaM, double _gamma, double _beta,
                              bool _updElemDisp, bool _incrementalAccel, bool _useAlphaCloseCheck,
-                             bool _order2)
+                             int _order2)
     : TransientIntegrator(classTag),
       alphaM(_alphaM), alphaF(_alphaF), beta(_beta), gamma(_gamma),
       updElemDisp(_updElemDisp), incrementalAccel(_incrementalAccel),
-      useAlphaCloseCheck(_useAlphaCloseCheck), order2(_order2), startPending(true), deltaT(0.0),
+      useAlphaCloseCheck(_useAlphaCloseCheck), order2(_order2 > 0), order2Taper(_order2 == 1),
+      startPending(true), deltaT(0.0),
       alpha1(0), alpha3(0), Mhat(0),
       updateCount(0), initAlphaMatrices(1),
       c1(0.0), c2(0.0), c3(0.0),
@@ -213,7 +217,7 @@ ExplicitAlpha::ExplicitAlpha(int classTag, double _alphaF, double _alphaM, doubl
       U(0), Udot(0), Udotdot(0),
       Ualpha(0), Ualphadot(0), Ualphadotdot(0),
       Utdothat(0),
-      Mmat(0), Cint(0), Vrep(0), work(0)
+      Mmat(0), Cint(0), Vrep(0), work(0), dVres(0)
 {
 }
 
@@ -225,7 +229,7 @@ ExplicitAlpha::ExplicitAlpha()
 
 
 ExplicitAlpha::ExplicitAlpha(double _alphaF, double _alphaM, double _gamma, double _beta, bool _updElemDisp,
-                             bool _incrementalAccel, bool _useAlphaCloseCheck, bool _order2)
+                             bool _incrementalAccel, bool _useAlphaCloseCheck, int _order2)
     : ExplicitAlpha(INTEGRATOR_TAGS_ExplicitAlpha, _alphaF, _alphaM, _gamma, _beta, _updElemDisp,
                     _incrementalAccel, _useAlphaCloseCheck, _order2)
 {
@@ -268,6 +272,8 @@ ExplicitAlpha::~ExplicitAlpha()
         delete Vrep;
     if (work != 0)
         delete work;
+    if (dVres != 0)
+        delete dVres;
 }
 
 
@@ -460,9 +466,16 @@ int ExplicitAlpha::newStep(double _deltaT)
 
     Ualphadot->addVector(0.0, *Utdot, (1.0 - alphaF));
     Ualphadot->addVector(1.0, *Udot, alphaF);
-    // -order2: resisting-force velocity argument v_alpha + gamma*dt*a_n (C_int part restored in formUnbalance)
-    if (order2)
-        Ualphadot->addVector(1.0, *Utdotdot, gamma * deltaT);
+    // -order2: resisting-force velocity argument v_alpha + dv with dv = gamma*dt*alpha1*a_n (tapered;
+    // Utdothat = dt*alpha1*a_n is already formed) or gamma*dt*a_n (-order2NoTaper). The C_int*dv part
+    // is restored in formUnbalance.
+    if (order2) {
+        if (order2Taper)
+            dVres->addVector(0.0, *Utdothat, gamma);
+        else
+            dVres->addVector(0.0, *Utdotdot, gamma * deltaT);
+        Ualphadot->addVector(1.0, *dVres, 1.0);
+    }
 
     if (incrementalAccel)
         *Ualphadotdot = *Utdotdot;
@@ -519,12 +532,12 @@ int ExplicitAlpha::formUnbalance()
     if (!order2)
         return 0;
 
-    // -order2: the trial velocity carried + gamma*dt*a_n into C v and f(u, v); add back
-    // C_int*gamma*dt*a_n so only the change of the rate tangent away from C_int is corrected.
+    // -order2: the trial velocity carried + dv into C v and f(u, v); add back C_int*dv so only
+    // the change of the rate tangent away from C_int is corrected.
     LinearSOE *theLinSOE = this->getLinearSOE();
-    if (theLinSOE == 0 || Cint == 0 || work == 0)
+    if (theLinSOE == 0 || Cint == 0 || work == 0 || dVres == 0)
         return -2;
-    work->addMatrixVector(0.0, *Cint, *Utdotdot, gamma * deltaT);
+    work->addMatrixVector(0.0, *Cint, *dVres, 1.0);
     Vector b(theLinSOE->getB());
     b.addVector(1.0, *work, 1.0);
     theLinSOE->setB(b);
@@ -751,12 +764,18 @@ int ExplicitAlpha::domainChanged()
         if (Vrep == 0 || Vrep->Size() != size) {
             delete Vrep;
             delete work;
+            delete dVres;
             Vrep = new Vector(size);
             work = new Vector(size);
+            dVres = new Vector(size);
         }
         // Mid-analysis: the domain holds the reported velocity; recover the algorithmic one.
-        if (!startPending && deltaT > 0.0)
-            Udot->addVector(1.0, *Udotdot, -gamma * deltaT);
+        if (!startPending && deltaT > 0.0) {
+            if (order2Taper && alpha1 != 0 && alpha1->noRows() == size)
+                Udot->addMatrixVector(1.0, *alpha1, *Udotdot, -gamma * deltaT);
+            else
+                Udot->addVector(1.0, *Udotdot, -gamma * deltaT);
+        }
     }
 
     initAlphaMatrices = 1;
@@ -798,9 +817,13 @@ int ExplicitAlpha::update(const Vector &aiPlusOne)
     }
 
     if (order2) {
-        // Report v = v_alg + gamma*dt*a_alg; the alpha-level evaluation stays the committing one.
+        // Report v = v_alg + gamma*dt*alpha1*a_alg (tapered) or v_alg + gamma*dt*a_alg;
+        // the alpha-level evaluation stays the committing one.
         *Vrep = *Udot;
-        Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
+        if (order2Taper)
+            Vrep->addMatrixVector(1.0, *alpha1, *Udotdot, gamma * deltaT);
+        else
+            Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
         theModel->setVel(*Vrep);
         theModel->setAccel(*Udotdot);
         theModel->setDisp(*U);
@@ -853,7 +876,7 @@ int ExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
     data(4) = updElemDisp ? 1.0 : 0.0;
     data(5) = incrementalAccel ? 1.0 : 0.0;
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(7) = order2 ? 1.0 : 0.0;
+    data(7) = order2 ? (order2Taper ? 1.0 : 2.0) : 0.0;
 
     if (theChannel.sendVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlpha::sendSelf() - could not send data\n";
@@ -880,6 +903,7 @@ int ExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &the
     incrementalAccel = (data(5) > 0.5);
     useAlphaCloseCheck = (data(6) > 0.5);
     order2 = (data(7) > 0.5);
+    order2Taper = (data(7) > 0.5 && data(7) < 1.5);
 
     return 0;
 }
@@ -906,7 +930,7 @@ void ExplicitAlpha::Print(OPS_Stream &s, int flag)
             s << "  alphaCloseCheck: yes\n";
         else
             s << "  alphaCloseCheck: no\n";
-        s << "  order2: " << (order2 ? "yes" : "no") << endln;
+        s << "  order2: " << (order2 ? (order2Taper ? "yes (tapered)" : "yes (untapered)") : "no") << endln;
     } else
         s << "ExplicitAlpha - no associated AnalysisModel\n";
 }

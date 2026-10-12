@@ -32,7 +32,7 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     ExplicitAlphaMultiSOE();
     ExplicitAlphaMultiSOE(double alphaF, double alphaM, double gamma, double beta,
                            bool updElemDisp = false, bool incrementalAccel = false,
-                           bool useAlphaCloseCheck = false, bool order2 = false);
+                           bool useAlphaCloseCheck = false, int order2 = 0);
     ~ExplicitAlphaMultiSOE() override;
 
     int formTangent(int statFlag) override;
@@ -62,7 +62,7 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
   protected:
     ExplicitAlphaMultiSOE(int classTag, double alphaF, double alphaM, double gamma, double beta,
                         bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck,
-                        bool order2 = false);
+                        int order2 = 0);
 
     double alphaM;
     double alphaF;
@@ -77,11 +77,17 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
      *  v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the residual, reported
      *  v_n = v_alg + gamma*dt*a_alg. */
     bool order2;
+    /** -order2 (default): taper the velocity shift and the reported-velocity correction by alpha1;
+     *  -order2NoTaper: untapered, as in the note. */
+    bool order2Taper;
     /** True until the -order2 starting correction has been applied. */
     bool startPending;
     /** Workspace SOE holding C_int (the C in alpha); only used through formAp. */
     LinearSOE *soeC;
     Vector *Vrep;
+    Vector *dVres;   // velocity shift of the resisting-force argument
+    Vector *A1next;  // alpha1*a_{n+1} from the reported velocity, reused by the next predictor
+    bool a1Valid;
 
     int applyOrder2Start(void);
 

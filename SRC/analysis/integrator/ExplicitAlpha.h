@@ -54,7 +54,7 @@ public:
     ExplicitAlpha();
     ExplicitAlpha(double alphaF, double alphaM, double gamma, double beta,
                   bool updElemDisp = false, bool incrementalAccel = false,
-                  bool useAlphaCloseCheck = false, bool order2 = false);
+                  bool useAlphaCloseCheck = false, int order2 = 0);
 
     virtual ~ExplicitAlpha();
 
@@ -82,7 +82,7 @@ public:
 
 protected:
     ExplicitAlpha(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck, bool order2);
+                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck, int order2);
 
     double alphaM;
     double alphaF;
@@ -108,6 +108,9 @@ protected:
      *  resisting force at v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the
      *  residual, and report v_n = v_alg + gamma*dt*a_alg (a_n stays the algorithmic value). */
     bool order2;
+    /** -order2 (default): taper the velocity shift and the reported-velocity correction by alpha1,
+     *  dv = gamma*dt*alpha1*a_n; -order2NoTaper: dv = gamma*dt*a_n as in the note. */
+    bool order2Taper;
     /** True until the -order2 starting correction has been applied. */
     bool startPending;
     double deltaT;
@@ -127,6 +130,7 @@ protected:
     Matrix *Cint;  // integrator damping C_int, the C in alpha (-order2 force correction)
     Vector *Vrep;  // reported velocity (-order2)
     Vector *work;  // work vector (-order2)
+    Vector *dVres; // velocity shift of the resisting-force argument (-order2)
 
     int applyOrder2Start(void);
 };
