@@ -308,7 +308,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         }
     }
 
-    void ensureMatrices(CudaPrecision prec)
+    void ensureMatrices(CudaPrecision prec, bool withC)
     {
         initCusparse();
         if (matM == nullptr) {
@@ -324,8 +324,10 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
             matA = new CudaCsrMatrix(solver, spmv, exec);
 
-            makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
-            matC = new CudaCsrMatrix(solver, spmv, exec);
+            if (withC) {  // C_int, -order2 only
+                makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
+                matC = new CudaCsrMatrix(solver, spmv, exec);
+            }
         }
     }
 
@@ -350,7 +352,8 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 matM->reset();
                 matAlpha->reset();
                 matA->reset();
-                matC->reset();
+                if (matC != nullptr)
+                    matC->reset();
             }
             if (matM->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matM->bindStructure failed\n";
@@ -364,7 +367,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matA->bindStructure failed\n";
                 return -1;
             }
-            if (matC->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
+            if (matC != nullptr && matC->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matC->bindStructure failed\n";
                 return -1;
             }
@@ -413,7 +416,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (gpuRc == 0) {
             cudaSOE->syncIndicesToDevice();
             cudaSOE->ensureDeviceVectorSizes();
-            ensureMatrices(cudaSOE->getPrecision());
+            ensureMatrices(cudaSOE->getPrecision(), integrator->order2);
             if (bindSharedStructure(cudaSOE) != 0)
                 gpuRc = -1;
         }

@@ -519,7 +519,7 @@ int ExplicitAlpha::applyStartCorrection()
     // -order2 also the velocity-form start of the algorithmic state, v_alg0 = v0 - gamma*dt*alpha1*a0.
     AnalysisModel *theModel = this->getAnalysisModel();
     LinearSOE *theLinSOE = this->getLinearSOE();
-    if (theModel == 0 || theLinSOE == 0 || Mmat == 0 || work == 0)
+    if (theModel == 0 || theLinSOE == 0 || Mmat == 0)
         return -1;
 
     // Zero trial acceleration, so the residual is p - C v0 - f and a0 = M^{-1} R0 directly.
@@ -799,7 +799,7 @@ int ExplicitAlpha::domainChanged()
         }
     }
 
-    if (initAccel) {
+    if (order2) {
         if (Vrep == 0 || Vrep->Size() != size) {
             delete Vrep;
             delete work;

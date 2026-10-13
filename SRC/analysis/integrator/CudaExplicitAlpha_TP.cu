@@ -310,7 +310,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
     }
 
-    void ensureMatrices(CudaPrecision prec)
+    void ensureMatrices(CudaPrecision prec, bool withC)
     {
         initCusparse();
         if (matM == nullptr) {
@@ -326,8 +326,10 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
             matA = new CudaCsrMatrix(solver, spmv, exec);
 
-            makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
-            matC = new CudaCsrMatrix(solver, spmv, exec);
+            if (withC) {  // C_int, -order2 only
+                makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
+                matC = new CudaCsrMatrix(solver, spmv, exec);
+            }
         }
     }
 
@@ -349,7 +351,8 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
                 matM->reset();
                 matAlpha->reset();
                 matA->reset();
-                matC->reset();
+                if (matC != nullptr)
+                    matC->reset();
             }
             if (matM->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
@@ -360,7 +363,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             if (matA->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
             }
-            if (matC->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
+            if (matC != nullptr && matC->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 return -1;
             }
             boundStructureRows = size;
@@ -390,7 +393,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         }
         cudaSOE->syncIndicesToDevice();
         cudaSOE->ensureDeviceVectorSizes();
-        ensureMatrices(cudaSOE->getPrecision());
+        ensureMatrices(cudaSOE->getPrecision(), integrator->order2);
         if (bindSharedStructure(cudaSOE) != 0) {
             return -1;
         }

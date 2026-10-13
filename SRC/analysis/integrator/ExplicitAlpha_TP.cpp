@@ -509,11 +509,13 @@ int ExplicitAlpha_TP::applyStartCorrection()
     // is the n-end velocity of the first step; without it v stays v0.
     AnalysisModel *theModel = this->getAnalysisModel();
     LinearSOE *theLinSOE = this->getLinearSOE();
-    if (theModel == 0 || theLinSOE == 0 || Mmat == 0 || work == 0)
+    if (theModel == 0 || theLinSOE == 0 || Mmat == 0 || (order2 && work == 0))
         return -1;
 
-    *Vrep = *Udot;  // prescribed v0
-    *Vforce = *Udot;  // nodal damping at v0
+    if (order2) {
+        *Vrep = *Udot;    // prescribed v0
+        *Vforce = *Udot;  // nodal damping at v0
+    }
     Udotdot->Zero();
     residD = residR = residP = 1.0;
     residM = 0.0;
@@ -791,7 +793,7 @@ int ExplicitAlpha_TP::domainChanged()
         }
     }
 
-    if (initAccel) {
+    if (order2) {
         if (Vrep == 0 || Vrep->Size() != size) {
             delete Vrep;
             delete Vforce;
