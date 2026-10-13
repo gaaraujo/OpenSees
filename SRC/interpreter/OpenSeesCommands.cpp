@@ -466,38 +466,6 @@ OpenSeesCommands::eigen(int typeSolver, double shift,
             } else {
 
                 theEigenSOE = new ArpackSOE(shift);
-#ifdef _PARALLEL_INTERPRETERS
-                if (theSOE != 0) {
-                    int soeTag = theSOE->getClassTag();
-                    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
-                        soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
-                        ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
-                        auto theMachineBroker = this->getMachineBroker();
-                        if (theMachineBroker != 0) {
-                            theArpackSOE->setProcessID(theMachineBroker->getPID());
-                            theArpackSOE->setChannels(this->getNumChannels(), this->getChannels());
-                        }
-                    }
-                }
-#endif
-
-#ifdef _PARALLEL_INTERPRETERS
-                // OpenSeesMP / OpenSeesPy: same pattern as MumpsParallelSOE
-                if (theSOE != 0) {
-                    int soeTag = theSOE->getClassTag();
-                    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
-                        ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
-                        MachineBroker *theMachineBroker = this->getMachineBroker();
-                        if (theMachineBroker != 0) {
-                            theArpackSOE->setProcessID(theMachineBroker->getPID());
-                            theArpackSOE->setChannels(this->getNumChannels(),
-                                                      this->getChannels());
-                        }
-                    }
-                }
-#endif
 
 #ifdef _PARALLEL_INTERPRETERS
                 // OpenSeesMP / OpenSeesPy: same pattern as MumpsParallelSOE
@@ -507,7 +475,8 @@ OpenSeesCommands::eigen(int typeSolver, double shift,
                         nativeSOE = &((WoodburySOE *)nativeSOE)->getInnerSOE();
                     int soeTag = nativeSOE->getClassTag();
                     if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+                        soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
                         ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
                         MachineBroker *theMachineBroker = this->getMachineBroker();
                         if (theMachineBroker != 0) {
