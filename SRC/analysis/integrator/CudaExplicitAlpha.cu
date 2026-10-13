@@ -839,6 +839,8 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.order2 = true;
         } else if (strcmp(tok, "-initAccel") == 0) {
             opts.initAccel = true;
+        } else if (strcmp(tok, "-noSecondPass") == 0) {
+            opts.noSecondPass = true;
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
@@ -951,6 +953,7 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       beta(_beta),
       gamma(_gamma),
       updElemDisp(opts.updElemDisp),
+      noSecondPass(opts.noSecondPass),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       order2(opts.order2),
@@ -1471,9 +1474,11 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         return 0;
     }
 
+    // -noSecondPass: skip the element update in update() (OpenSees' second pass at (u_{n+alpha}, v_{n+1}));
+    // the alpha-level evaluation of newStep is then the committing one: the method as published.
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
-    if (theModel->updateDomain() < 0) {
+    if (!noSecondPass && theModel->updateDomain() < 0) {
         opserr << "ERROR CudaExplicitAlpha::update() - updateDomain failed"
                << " |U|=" << U->Norm()
                << " |Udot|=" << Udot->Norm()

@@ -42,6 +42,7 @@ public:
         bool useAlphaCloseCheck = false;
         bool order2 = false;
         bool initAccel = false;
+        bool noSecondPass = false;
     };
 
     CudaExplicitAlpha();
@@ -76,6 +77,7 @@ protected:
     double beta;
     double gamma;
     bool updElemDisp;
+    bool noSecondPass;  // -noSecondPass (see update())
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     /** -order2: with dv = gamma*dt*alpha1*a_n, start with v_alg0 = v0 - dv(a0), resisting force at

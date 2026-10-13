@@ -20,6 +20,14 @@
 
 namespace {
 
+bool s_noSecondPass = false;
+template <class T> T *markOnePass(T *p)
+{
+    if (p != nullptr)
+        p->setNoSecondPass(s_noSecondPass);
+    return p;
+}
+
 bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
                                        bool &order2, bool &initAccel)
 {
@@ -28,6 +36,7 @@ bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel
     useAlphaCloseCheck = false;
     order2 = false;
     initAccel = false;
+    s_noSecondPass = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -43,6 +52,8 @@ bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel
             order2 = true;
         } else if (strcmp(argvLoc, "-initAccel") == 0) {
             initAccel = true;
+        } else if (strcmp(argvLoc, "-noSecondPass") == 0) {
+            s_noSecondPass = true;
         } else {
             opserr << "WARNING ExplicitAlphaMultiSOE family - unknown flag " << argvLoc
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
@@ -105,8 +116,8 @@ OPS_ExplicitAlphaMultiSOE(void)
         return nullptr;
     }
 
-    theIntegrator = new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                              useAlphaCloseCheck, order2, initAccel);
+    theIntegrator = markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                              useAlphaCloseCheck, order2, initAccel));
 
     if (theIntegrator == nullptr)
         opserr << "WARNING - out of memory creating ExplicitAlphaMultiSOE integrator\n";
@@ -146,8 +157,8 @@ OPS_KRAlphaExplicitMultiSOE(void)
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                     useAlphaCloseCheck, order2, initAccel);
+    return markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                     useAlphaCloseCheck, order2, initAccel));
 }
 
 void *
@@ -186,8 +197,8 @@ OPS_MKRAlphaExplicitMultiSOE(void)
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                     useAlphaCloseCheck, order2, initAccel);
+    return markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                     useAlphaCloseCheck, order2, initAccel));
 }
 
 
@@ -911,9 +922,11 @@ ExplicitAlphaMultiSOE::update(const Vector &aiPlusOne)
         return 0;
     }
 
+    // -noSecondPass: skip the element update in update() (OpenSees' second pass at (u_{n+alpha}, v_{n+1}));
+    // the alpha-level evaluation of newStep is then the committing one: the method as published.
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
-    if (theModel->updateDomain() < 0) {
+    if (!noSecondPass && theModel->updateDomain() < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::update() - updateDomain failed\n";
         return -5;
     }
