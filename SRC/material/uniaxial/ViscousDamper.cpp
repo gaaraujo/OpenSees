@@ -254,6 +254,26 @@ ViscousDamper::setTrialStrain(double strain, double strainRate)
   Tstress = fd0; // Stress 
   TVel = Vel;
   Tstrain = strain;
+
+  // Damping tangent dF/dv at the end of the step. The force depends on the strain rate only (the ODE above is
+  // driven by the velocity), so getTangent is zero and the rate effect, including the series spring, goes here.
+  // Linearization of the trapezoidal step F1 = F0 + K*dt*[(v0 + v1)/2 - (g(F0) + g(F1))/2], with the dashpot
+  // velocity g(F) = sgn(F)*(|F|/C)^(1/Alpha): dF1/dv1 = (K*dt/2) / (1 + (K*dt/2)*g'(F1)), which is K*dt/2 at
+  // rest (the damper acts as its spring) and decreases as the dashpot strokes. Zero in a static analysis or
+  // inside the gap.
+  Ttangent = 0.0;
+  if (fabs(strainRate) > 0.0 && ops_Dt > 0.0 && !(LGap > 0. && fd0 == 0.)) {
+    const double kh = 0.5 * K * ops_Dt;
+    const double F = fabs(fd0);
+    double gp;  // g'(F)
+    if (Alpha == 1.0)
+      gp = 1.0 / C;
+    else if (F > 0.0)
+      gp = pow(F, 1.0/Alpha - 1.0) / (Alpha * pow(C, 1.0/Alpha));
+    else
+      gp = (Alpha < 1.0) ? 0.0 : -1.0;  // Alpha > 1: g'(0) is unbounded, the tangent vanishes
+    Ttangent = (gp < 0.0) ? 0.0 : kh / (1.0 + kh * gp);
+  }
   
    return 0;
 }
@@ -275,8 +295,7 @@ double ViscousDamper::getInitialTangent(void)
 
 double ViscousDamper::getDampTangent(void)
 {
-  
-  return 0; 
+  return Ttangent;
 }
 
 
