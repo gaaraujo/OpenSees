@@ -54,7 +54,7 @@ public:
     ExplicitAlpha();
     ExplicitAlpha(double alphaF, double alphaM, double gamma, double beta,
                   bool updElemDisp = false, bool incrementalAccel = false,
-                  bool useAlphaCloseCheck = false, int order2 = 0);
+                  bool useAlphaCloseCheck = false, bool order2 = false, bool initAccel = false);
 
     virtual ~ExplicitAlpha();
 
@@ -82,7 +82,8 @@ public:
 
 protected:
     ExplicitAlpha(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck, int order2);
+                  bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck, bool order2,
+                  bool initAccel);
 
     double alphaM;
     double alphaF;
@@ -103,15 +104,15 @@ protected:
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
     bool useAlphaCloseCheck;
-    /** If true (-order2), apply the second-order corrections: start from the equilibrium
-     *  acceleration with the algorithmic velocity shifted by -gamma*dt*alpha1*a0, evaluate the
-     *  resisting force at v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the
-     *  residual, and report v_n = v_alg + gamma*dt*a_alg (a_n stays the algorithmic value). */
+    /** If true (-order2), apply the second-order corrections with dv = gamma*dt*alpha1*a_n:
+     *  start with the algorithmic velocity shifted by -dv(a0), evaluate the resisting force at
+     *  v_alpha + dv with C_int*dv added back to the residual, and report v_n = v_alg + dv(a_alg)
+     *  (a_n stays the algorithmic value). Implies initAccel. */
     bool order2;
-    /** -order2 (default): taper the velocity shift and the reported-velocity correction by alpha1,
-     *  dv = gamma*dt*alpha1*a_n; -order2NoTaper: dv = gamma*dt*a_n as in the note. */
-    bool order2Taper;
-    /** True until the -order2 starting correction has been applied. */
+    /** If true (-initAccel, or -order2), start from the equilibrium acceleration
+     *  M a0 = p(t0) - C v0 - f(u0, v0) instead of the committed acceleration. */
+    bool initAccel;
+    /** True until the starting correction (-initAccel / -order2) has been applied. */
     bool startPending;
     double deltaT;
 
@@ -126,14 +127,14 @@ protected:
     Vector *U, *Udot, *Udotdot;
     Vector *Ualpha, *Ualphadot, *Ualphadotdot;
     Vector *Utdothat;
-    Matrix *Mmat;  // mass matrix (-order2 start)
+    Matrix *Mmat;  // mass matrix (-initAccel / -order2 start)
     Matrix *Cint;  // integrator damping C_int, the C in alpha (-order2 force correction)
     Vector *Vrep;  // reported velocity (-order2)
-    Vector *work;  // work vector (-order2)
+    Vector *work;  // work vector (-initAccel / -order2)
     Vector *dVres; // velocity shift of the resisting-force argument (-order2)
     double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
 
-    int applyOrder2Start(void);
+    int applyStartCorrection(void);
 };
 
 void *OPS_ExplicitAlpha(void);

@@ -41,7 +41,7 @@ public:
         bool incrementalAccel = false;
         bool useAlphaCloseCheck = false;
         bool order2 = false;
-        bool order2Taper = true;
+        bool initAccel = false;
     };
 
     CudaExplicitAlpha();
@@ -78,17 +78,17 @@ protected:
     bool updElemDisp;
     bool incrementalAccel;
     bool useAlphaCloseCheck;
-    /** -order2: equilibrium start with v_alg0 = v0 - gamma*dt*alpha1*a0, resisting force at
-     *  v_alpha + gamma*dt*a_n with C_int*gamma*dt*a_n added back to the residual on the GPU,
-     *  reported v_n = v_alg + gamma*dt*a_alg. */
+    /** -order2: with dv = gamma*dt*alpha1*a_n, start with v_alg0 = v0 - dv(a0), resisting force at
+     *  v_alpha + dv with C_int*dv added back to the residual on the GPU, reported v_n = v_alg + dv(a_alg).
+     *  Implies initAccel. */
     bool order2;
-    bool order2Taper;   // -order2 (default) tapers dv and the reported correction by alpha1; -order2NoTaper does not
-    bool startPending;  // -order2 starting correction not yet applied
+    bool initAccel;     // -initAccel (or -order2): start from the equilibrium acceleration M a0 = p - C v0 - f
+    bool startPending;  // starting correction (-initAccel / -order2) not yet applied
     Vector *Vrep;       // reported velocity (-order2)
-    Vector *A1host;     // alpha1*a_{n+1} on the host (-order2 tapered reporting)
+    Vector *A1host;     // alpha1*a_{n+1} on the host (-order2 reporting)
     double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
 
-    int applyOrder2Start(CudaBcsrLinSOE *cudaSOE);
+    int applyStartCorrection(CudaBcsrLinSOE *cudaSOE);
 
     int updateCount;
     double c1, c2, c3;
@@ -109,6 +109,9 @@ protected:
     /** True when host U/Udot/Uddot were written without updating the GPU mirror
      *  (domainChanged, revert, gather). Cleared after newStepPredictor H2D. */
     bool deviceMotionStale;
+    /** -order2, set by a mid-analysis domainChanged: the predictor recovers
+     *  v_alg = v_rep - gamma*dt*alpha1*a_n on the device once it has solved for alpha1*a_n. */
+    bool velRecoverPending;
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;

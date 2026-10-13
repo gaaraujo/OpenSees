@@ -18,11 +18,13 @@
 
 namespace {
 
-bool parseExplicitAlphaMultiSOETPOptions(bool &incrementalAccel, bool &useAlphaCloseCheck, int &order2)
+bool parseExplicitAlphaMultiSOETPOptions(bool &incrementalAccel, bool &useAlphaCloseCheck, bool &order2,
+                                         bool &initAccel)
 {
     incrementalAccel = false;
     useAlphaCloseCheck = false;
-    order2 = 0;
+    order2 = false;
+    initAccel = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -33,13 +35,12 @@ bool parseExplicitAlphaMultiSOETPOptions(bool &incrementalAccel, bool &useAlphaC
         } else if (strcmp(argvLoc, "-alphaCloseCheck") == 0) {
             useAlphaCloseCheck = true;
         } else if (strcmp(argvLoc, "-order2") == 0) {
-            if (order2 == 0)
-                order2 = 1;
-        } else if (strcmp(argvLoc, "-order2NoTaper") == 0) {
-            order2 = 2;
+            order2 = true;
+        } else if (strcmp(argvLoc, "-initAccel") == 0) {
+            initAccel = true;
         } else {
             opserr << "WARNING ExplicitAlphaMultiSOE_TP family - unknown flag " << argvLoc
-                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-order2> <-order2NoTaper>\n";
+                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
             return false;
         }
     }
@@ -91,13 +92,14 @@ OPS_ExplicitAlphaMultiSOE_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    int order2 = 0;
-    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return nullptr;
     }
 
     theIntegrator = new ExplicitAlphaMultiSOE_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck,
-                                                 order2);
+                                                 order2, initAccel);
 
     if (theIntegrator == nullptr)
         opserr << "WARNING - out of memory creating ExplicitAlphaMultiSOE_TP integrator\n";
@@ -129,12 +131,13 @@ OPS_KRAlphaExplicitMultiSOE_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    int order2 = 0;
-    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2);
+    return new ExplicitAlphaMultiSOE_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2, initAccel);
 }
 
 void *
@@ -166,20 +169,21 @@ OPS_MKRAlphaExplicitMultiSOE_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    int order2 = 0;
-    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaMultiSOETPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2);
+    return new ExplicitAlphaMultiSOE_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2, initAccel);
 }
 
 
 ExplicitAlphaMultiSOE_TP::ExplicitAlphaMultiSOE_TP(int classTag, double _alphaF, double _alphaM, double _gamma,
                                                    double _beta, bool _incrementalAccel, bool _useAlphaCloseCheck,
-                                                   int _order2)
+                                                   bool _order2, bool _initAccel)
     : ExplicitAlphaMultiSOE(classTag, _alphaF, _alphaM, _gamma, _beta, false, _incrementalAccel,
-                            _useAlphaCloseCheck, _order2),
+                            _useAlphaCloseCheck, _order2, _initAccel),
       Put(nullptr),
       Vforce(nullptr),
       residM(0.0),
@@ -197,9 +201,10 @@ ExplicitAlphaMultiSOE_TP::ExplicitAlphaMultiSOE_TP()
 
 
 ExplicitAlphaMultiSOE_TP::ExplicitAlphaMultiSOE_TP(double _alphaF, double _alphaM, double _gamma, double _beta,
-                                                   bool _incrementalAccel, bool _useAlphaCloseCheck, int _order2)
+                                                   bool _incrementalAccel, bool _useAlphaCloseCheck, bool _order2,
+                                                   bool _initAccel)
     : ExplicitAlphaMultiSOE_TP(INTEGRATOR_TAGS_ExplicitAlphaMultiSOE_TP, _alphaF, _alphaM, _gamma, _beta,
-                               _incrementalAccel, _useAlphaCloseCheck, _order2)
+                               _incrementalAccel, _useAlphaCloseCheck, _order2, _initAccel)
 {
 }
 
@@ -291,21 +296,26 @@ ExplicitAlphaMultiSOE_TP::newStep(double _deltaT)
         return -5;
     }
 
-    // -order2 start (residual weights of the n end; nodal damping at the prescribed v0)
-    if (order2 && startPending) {
+    // -initAccel / -order2 start (residual weights of the n end; nodal damping at the prescribed v0)
+    if (initAccel && startPending) {
         residD = residR = residP = 1.0;
         residM = 0.0;
-        *Vforce = *Udot;
-        *Vrep = *Udot;
-        if (this->applyOrder2Start() != 0) {
-            opserr << "WARNING ExplicitAlphaMultiSOE_TP::newStep() - -order2 starting correction failed\n";
+        if (order2) {
+            *Vforce = *Udot;
+            *Vrep = *Udot;
+        }
+        if (this->applyStartCorrection() != 0) {
+            opserr << "WARNING ExplicitAlphaMultiSOE_TP::newStep() - starting correction (-initAccel / -order2) failed\n";
             return -11;
         }
         startPending = false;
-        // n end of the first step: v_alg0 + dv_0 (= v0 when tapered) and a0 (w3 = alpha1*a0)
-        *Vrep = *Udot;
-        Vrep->addVector(1.0, order2Taper ? *w3 : *Udotdot, gamma * deltaT);
-        theModel->setResponse(*U, *Vrep, *Udotdot);
+        if (order2) {
+            // n end of the first step: v_alg0 + dv_0 (= v0) and a0 (w3 = alpha1*a0)
+            *Vrep = *Udot;
+            Vrep->addVector(1.0, *w3, gamma * deltaT);
+            theModel->setResponse(*U, *Vrep, *Udotdot);
+        } else
+            theModel->setResponse(*U, *Udot, *Udotdot);
     }
 
     // Current state: Ut = U_n, Utdot = Udot_n, Utdotdot = Uddot_n
@@ -313,9 +323,9 @@ ExplicitAlphaMultiSOE_TP::newStep(double _deltaT)
     (*Utdot) = *Udot;
     (*Utdotdot) = *Udotdot;
 
-    // -order2: alpha1*a_n before the n-end pass (dv needs it). Tapered reporting already formed it.
+    // -order2: alpha1*a_n before the n-end pass (dv needs it). The reported velocity already formed it.
     if (order2) {
-        if (order2Taper && a1Valid) {
+        if (a1Valid) {
             *w1 = *A1next;
         } else if (applyAlpha1(*Utdotdot, *w1) != 0) {
             opserr << "WARNING ExplicitAlphaMultiSOE_TP::newStep() - applyAlpha1 failed\n";
@@ -323,10 +333,13 @@ ExplicitAlphaMultiSOE_TP::newStep(double _deltaT)
         }
         a1Valid = false;
         Utdothat->addVector(0.0, *w1, deltaT);
-        if (order2Taper)
-            dVres->addVector(0.0, *Utdothat, gamma);
-        else
-            dVres->addVector(0.0, *Utdotdot, gamma * deltaT);
+        if (velRecoverPending) {
+            // mid-analysis domainChanged: recover v_alg = v_rep - gamma*dt*alpha1*a_n
+            Udot->addVector(1.0, *Utdothat, -gamma);
+            *Utdot = *Udot;
+            velRecoverPending = false;
+        }
+        dVres->addVector(0.0, *Utdothat, gamma);
         // n end: committed state, whose velocity is the reported v_alg_n + dv; nodal damping likewise
         *Vforce = *Utdot;
         Vforce->addVector(1.0, *dVres, 1.0);
@@ -521,17 +534,13 @@ ExplicitAlphaMultiSOE_TP::update(const Vector &aiPlusOne)
     }
 
     if (order2) {
-        // Commit the reported velocity, also the n-end velocity of the next step; the tapered
-        // alpha1*a_{n+1} is reused by the next predictor.
+        // Commit the reported velocity v_alg + gamma*dt*alpha1*a, also the n-end velocity of the
+        // next step; alpha1*a_{n+1} is reused by the next predictor.
         *Vrep = *Udot;
-        if (order2Taper) {
-            if (applyAlpha1(*Udotdot, *A1next) != 0)
-                return -6;
-            a1Valid = true;
-            Vrep->addVector(1.0, *A1next, gamma * deltaT);
-        } else {
-            Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
-        }
+        if (applyAlpha1(*Udotdot, *A1next) != 0)
+            return -6;
+        a1Valid = true;
+        Vrep->addVector(1.0, *A1next, gamma * deltaT);
         theModel->setVel(*Vrep);
     }
     theModel->setAccel(*Udotdot);
@@ -595,6 +604,8 @@ ExplicitAlphaMultiSOE_TP::Print(OPS_Stream &s, int flag)
         s << "ExplicitAlphaMultiSOE_TP - currentTime: " << currentTime << endln;
         s << "  alphaF: " << alphaF << "  alphaM: " << alphaM << "  gamma: " << gamma << "  beta: " << beta << endln;
         s << "  c1: " << c1 << "  c2: " << c2 << "  c3: " << c3 << endln;
+        s << "  order2: " << (order2 ? "yes" : "no") << endln;
+        s << "  initAccel: " << (initAccel ? "yes" : "no") << endln;
     } else
         s << "ExplicitAlphaMultiSOE_TP - no associated AnalysisModel\n";
 }

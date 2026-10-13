@@ -545,7 +545,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             hostOut[i] = static_cast<double>(tmp[i]);
     }
 
-    // -order2, before the n-end pass: dv = gamma*dt*alpha1*a_n (tapered) or gamma*dt*a_n, on device and host.
+    // -order2, before the n-end pass: dv = gamma*dt*alpha1*a_n, on device and host.
     int order2PreStep(CudaExplicitAlpha_TP *integrator, double *hostDv) override
     {
         if (size > 0 && integrator->deviceMotionStale) {
@@ -554,20 +554,27 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
             integrator->deviceMotionStale = false;
             alpha1Ready = false;
         }
-        const T *x = devUddot();
-        if (integrator->order2Taper) {
-            if (!alpha1Ready && solveAlpha1(devUddot()) != 0) {
-                return -1;
-            }
-            alpha1Ready = true;
-            x = thrust::raw_pointer_cast(d_alphaSol.data());
+        if (!alpha1Ready && solveAlpha1(devUddot()) != 0) {
+            return -1;
         }
+        alpha1Ready = true;
+        const T *x = thrust::raw_pointer_cast(d_alphaSol.data());
         T *dv = thrust::raw_pointer_cast(d_dv.data());
         cudaMemsetAsync(dv, 0, static_cast<std::size_t>(size) * sizeof(T), stream);
         kernelAxpby<<<gridBlocks(size), 256, 0, stream>>>(
             size, static_cast<T>(integrator->gamma * integrator->deltaT), x, static_cast<T>(0.0), dv);
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -order2 dv");
         copyToHost(d_dv, hostDv);
+        if (integrator->velRecoverPending) {
+            // after a mid-analysis domainChanged: v_alg = v_rep - dv on the host mirrors, then re-upload
+            for (int i = 0; i < size; ++i) {
+                (*integrator->Udot)(i) -= hostDv[i];
+                (*integrator->Utdot)(i) -= hostDv[i];
+            }
+            d_state_cur = h_state_cur;
+            d_state_prev = h_state_prev;
+            integrator->velRecoverPending = false;
+        }
         return 0;
     }
 
@@ -589,7 +596,8 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         return 0;
     }
 
-    // -order2 start: host B holds R0 = p - C v0 - f(u0, v0); a0 = M^{-1} R0, Udot -= gamma*dt*alpha1*a0.
+    // -initAccel / -order2 start: host B holds R0 = p - C v0 - f(u0, v0); a0 = M^{-1} R0 and, with
+    // -order2, Udot -= gamma*dt*alpha1*a0.
     int applyStart(CudaExplicitAlpha_TP *integrator, CudaBcsrLinSOE *cudaSOE, double *hostA1) override
     {
         if (bindStream(cudaSOE) != 0 || matM == nullptr || !matM->isFactored()) {
@@ -605,6 +613,12 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         if (matM->solve(cudaSOE->getDeviceB(), devUddot()) != 0) {
             return -2;
         }
+        if (!integrator->order2) {
+            cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -initAccel start");
+            h_state_cur = d_state_cur;
+            alpha1Ready = false;
+            return 0;
+        }
         if (solveAlpha1(devUddot()) != 0) {
             return -3;
         }
@@ -618,7 +632,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         return 0;
     }
 
-    // -order2 tapered reporting: alpha1 * Uddot_{n+1} (cached for the next step) to the host.
+    // -order2 reporting: alpha1 * Uddot_{n+1} (cached for the next step) to the host.
     int alpha1Accel(double *hostOut) override
     {
         if (solveAlpha1(devUddot()) != 0) {
@@ -851,12 +865,11 @@ bool parseCudaExplicitAlphaTPOptions(CudaExplicitAlpha_TP::Options &opts)
             opts.useAlphaCloseCheck = true;
         } else if (strcmp(tok, "-order2") == 0) {
             opts.order2 = true;
-        } else if (strcmp(tok, "-order2NoTaper") == 0) {
-            opts.order2 = true;
-            opts.order2Taper = false;
+        } else if (strcmp(tok, "-initAccel") == 0) {
+            opts.initAccel = true;
         } else {
             opserr << "WARNING CudaExplicitAlpha_TP family - unknown flag " << tok
-                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-order2> <-order2NoTaper>\n";
+                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
             return false;
         }
     }
@@ -972,7 +985,7 @@ CudaExplicitAlpha_TP::CudaExplicitAlpha_TP(int classTag, double _alphaF, double 
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       order2(opts.order2),
-      order2Taper(opts.order2Taper),
+      initAccel(opts.initAccel || opts.order2),
       startPending(true),
       Vrep(new Vector(0)),
       Vforce(new Vector(0)),
@@ -997,6 +1010,7 @@ CudaExplicitAlpha_TP::CudaExplicitAlpha_TP(int classTag, double _alphaF, double 
       operatorsBuilt(false),
       motionNeedsGather(true),
       deviceMotionStale(true),
+      velRecoverPending(false),
       m_impl(nullptr)
 {
 }
@@ -1194,9 +1208,9 @@ int CudaExplicitAlpha_TP::domainChanged()
                 (*Udotdot)(loc) = accel(i);
         }
     }
-    // -order2 mid-analysis: the domain holds the reported velocity; recover the algorithmic one (untapered inverse).
-    if (order2 && !startPending && deltaT > 0.0)
-        Udot->addVector(1.0, *Udotdot, -gamma * deltaT);
+    // -order2 mid-analysis: the domain holds the reported velocity v_alg + gamma*dt*alpha1*a; the
+    // algorithmic one is recovered in order2PreStep, which forms dv = gamma*dt*alpha1*a_n.
+    velRecoverPending = (order2 && !startPending && deltaT > 0.0);
     Vrep->resize(size);
     Vforce->resize(size);
     dVres->resize(size);
@@ -1213,8 +1227,8 @@ int CudaExplicitAlpha_TP::domainChanged()
     return 0;
 }
 
-// -order2 starting correction (collective in OpenSeesMP), TP residual weights of the n end.
-int CudaExplicitAlpha_TP::applyOrder2Start(CudaBcsrLinSOE *cudaSOE)
+// -initAccel / -order2 starting correction (collective in OpenSeesMP), TP residual weights of the n end.
+int CudaExplicitAlpha_TP::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
 {
     AnalysisModel *theModel = this->getAnalysisModel();
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
@@ -1267,10 +1281,13 @@ int CudaExplicitAlpha_TP::applyOrder2Start(CudaBcsrLinSOE *cudaSOE)
         if (rc != 0)
             return rc;
     }
-    // n end of the first step: v_alg0 + dv_0 (= v0 when tapered) and a0, so the inertia terms cancel
-    *Vrep = *Udot;
-    Vrep->addVector(1.0, order2Taper ? *A1host : *Udotdot, gamma * deltaT);
-    theModel->setResponse(*U, *Vrep, *Udotdot);
+    if (order2) {
+        // n end of the first step: v_alg0 + dv_0 (= v0) and a0, so the inertia terms cancel
+        *Vrep = *Udot;
+        Vrep->addVector(1.0, *A1host, gamma * deltaT);
+        theModel->setResponse(*U, *Vrep, *Udotdot);
+    } else
+        theModel->setResponse(*U, *Udot, *Udotdot);
     return 0;
 }
 
@@ -1341,17 +1358,17 @@ int CudaExplicitAlpha_TP::newStep(double _deltaT)
         operatorsBuilt = true;
     }
 
-    if (order2) {
-        if (startPending) {
-            if (applyOrder2Start(cudaSOE) != 0) {
-                opserr << "ERROR CudaExplicitAlpha_TP::newStep() - -order2 starting correction failed\n";
-                return -10;
-            }
-            startPending = false;
-            *Ut = *U;
-            *Utdot = *Udot;
-            *Utdotdot = *Udotdot;
+    if (initAccel && startPending) {
+        if (applyStartCorrection(cudaSOE) != 0) {
+            opserr << "ERROR CudaExplicitAlpha_TP::newStep() - starting correction (-initAccel / -order2) failed\n";
+            return -10;
         }
+        startPending = false;
+        *Ut = *U;
+        *Utdot = *Udot;
+        *Utdotdot = *Udotdot;
+    }
+    if (order2) {
         // dv before the n-end pass (root GPU; broadcast to workers)
         int rc = 0;
         if (deviceOn)
@@ -1516,22 +1533,18 @@ int CudaExplicitAlpha_TP::update(const Vector &aiPlusOne)
         }
     }
     if (order2) {
-        // Commit the reported velocity v_alg + gamma*dt*alpha1*a (or + gamma*dt*a): also the next n end.
+        // Commit the reported velocity v_alg + gamma*dt*alpha1*a: also the next n end.
         *Vrep = *Udot;
-        if (order2Taper) {
-            int rc = 0;
-            if (cudaSOE->isCudaDeviceEnabled())
-                rc = (m_impl != nullptr) ? m_impl->alpha1Accel(&(*A1host)(0)) : -1;
-            if (auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE())) {
-                if (distSOE->broadcastFromRoot(*A1host) < 0)
-                    return -5;
-            }
-            if (rc != 0)
+        int rc = 0;
+        if (cudaSOE->isCudaDeviceEnabled())
+            rc = (m_impl != nullptr) ? m_impl->alpha1Accel(&(*A1host)(0)) : -1;
+        if (auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE())) {
+            if (distSOE->broadcastFromRoot(*A1host) < 0)
                 return -5;
-            Vrep->addVector(1.0, *A1host, gamma * deltaT);
-        } else {
-            Vrep->addVector(1.0, *Udotdot, gamma * deltaT);
         }
+        if (rc != 0)
+            return -5;
+        Vrep->addVector(1.0, *A1host, gamma * deltaT);
         theModel->setVel(*Vrep);
     }
     theModel->setAccel(*Udotdot);
@@ -1573,25 +1586,26 @@ const Vector &CudaExplicitAlpha_TP::getVel() { return order2 ? *Vforce : *Udot; 
 
 int CudaExplicitAlpha_TP::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(7);
+    Vector data(8);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
     data(3) = gamma;
     data(4) = incrementalAccel ? 1.0 : 0.0;
     data(5) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(6) = order2 ? (order2Taper ? 1.0 : 2.0) : 0.0;
+    data(6) = order2 ? 1.0 : 0.0;
+    data(7) = initAccel ? 1.0 : 0.0;
     return theChannel.sendVector(this->getDbTag(), cTag, data);
 }
 
 int CudaExplicitAlpha_TP::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-    Vector data(7);
+    Vector data(8);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0) {
         return -1;
     }
     order2 = data(6) > 0.5;
-    order2Taper = data(6) > 0.5 && data(6) < 1.5;
+    initAccel = data(7) > 0.5 || order2;
     alphaM = data(0);
     alphaF = data(1);
     beta = data(2);
@@ -1609,7 +1623,8 @@ int CudaExplicitAlpha_TP::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBrok
 void CudaExplicitAlpha_TP::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
-    s << "CudaExplicitAlpha_TP alphaF=" << alphaF << " alphaM=" << alphaM;
+    s << "CudaExplicitAlpha_TP alphaF=" << alphaF << " alphaM=" << alphaM
+      << " order2=" << (order2 ? 1 : 0) << " initAccel=" << (initAccel ? 1 : 0);
     s << endln;
 }
 

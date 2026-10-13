@@ -53,7 +53,8 @@ class ExplicitAlpha_TP : public TransientIntegrator
 public:
     ExplicitAlpha_TP();
     ExplicitAlpha_TP(double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel = false, bool useAlphaCloseCheck = false, int order2 = 0);
+                     bool incrementalAccel = false, bool useAlphaCloseCheck = false, bool order2 = false,
+                     bool initAccel = false);
 
     virtual ~ExplicitAlpha_TP();
 
@@ -84,7 +85,8 @@ public:
 
 protected:
     ExplicitAlpha_TP(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel, bool useAlphaCloseCheck, int order2 = 0);
+                     bool incrementalAccel, bool useAlphaCloseCheck, bool order2 = false,
+                     bool initAccel = false);
 
     double alphaM;
     double alphaF;
@@ -118,11 +120,13 @@ protected:
     Vector *Utdothat;
     Vector *Put;
 
-    /** -order2 (tapered, default) / -order2NoTaper: same corrections as ExplicitAlpha. Both force
-     *  ends use the velocity shifted by dv = gamma*dt*alpha1*a_n (or gamma*dt*a_n); the n end gets it
-     *  by committing the reported velocity v_alg + dv at the previous step. */
+    /** -order2: same corrections as ExplicitAlpha. Both force ends use the velocity shifted by
+     *  dv = gamma*dt*alpha1*a_n; the n end gets it by committing the reported velocity v_alg + dv
+     *  at the previous step. Implies initAccel. */
     bool order2;
-    bool order2Taper;
+    /** -initAccel (or -order2): start from the equilibrium acceleration
+     *  M a0 = p(t0) - C v0 - f(u0, v0) instead of the committed acceleration. */
+    bool initAccel;
     bool startPending;
     Matrix *Mmat;
     Matrix *Cint;
@@ -131,7 +135,7 @@ protected:
     Vector *Vrep;    // reported (and committed) velocity
     Vector *work;
 
-    int applyOrder2Start(void);
+    int applyStartCorrection(void);
 };
 
 void *OPS_ExplicitAlpha_TP(void);

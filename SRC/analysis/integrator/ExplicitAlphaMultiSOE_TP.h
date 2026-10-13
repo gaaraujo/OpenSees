@@ -18,7 +18,8 @@ class ExplicitAlphaMultiSOE_TP : public ExplicitAlphaMultiSOE
   public:
     ExplicitAlphaMultiSOE_TP();
     ExplicitAlphaMultiSOE_TP(double alphaF, double alphaM, double gamma, double beta,
-                             bool incrementalAccel = false, bool useAlphaCloseCheck = false, int order2 = 0);
+                             bool incrementalAccel = false, bool useAlphaCloseCheck = false, bool order2 = false,
+                             bool initAccel = false);
     ~ExplicitAlphaMultiSOE_TP() override;
 
     int formUnbalance(void) override;
@@ -39,7 +40,8 @@ class ExplicitAlphaMultiSOE_TP : public ExplicitAlphaMultiSOE
 
   protected:
     ExplicitAlphaMultiSOE_TP(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                             bool incrementalAccel, bool useAlphaCloseCheck, int order2 = 0);
+                             bool incrementalAccel, bool useAlphaCloseCheck, bool order2 = false,
+                             bool initAccel = false);
 
     Vector *Put;
     Vector *Vforce;  // -order2: velocity handed to nodal damping / getVel at the current force end
