@@ -32,7 +32,8 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     ExplicitAlphaMultiSOE();
     ExplicitAlphaMultiSOE(double alphaF, double alphaM, double gamma, double beta,
                            bool updElemDisp = false, bool incrementalAccel = false,
-                           bool useAlphaCloseCheck = false);
+                           bool useAlphaCloseCheck = false, bool order2 = false,
+                           bool initAccel = false);
     ~ExplicitAlphaMultiSOE() override;
 
     int formTangent(int statFlag) override;
@@ -61,7 +62,8 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
 
   protected:
     ExplicitAlphaMultiSOE(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                        bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck);
+                        bool updElemDisp, bool incrementalAccel, bool useAlphaCloseCheck,
+                        bool order2 = false, bool initAccel = false);
 
     double alphaM;
     double alphaF;
@@ -72,7 +74,27 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */
     bool useAlphaCloseCheck;
-    double tStepStart = -1.0;  // domain time at the start of the step (committed-time shift for ops_Dt)
+    /** -order2: with dv = gamma*dt*alpha1*a_n, start with v_alg0 = v0 - dv(a0), resisting force at
+     *  v_alpha + dv with C_int*dv added back to the residual, reported v_n = v_alg + dv(a_alg).
+     *  Implies initAccel. */
+    bool order2;
+    /** -initAccel (or -order2): start from the equilibrium acceleration
+     *  M a0 = p(t0) - C v0 - f(u0, v0) instead of the committed acceleration. */
+    bool initAccel;
+    /** True until the starting correction (-initAccel / -order2) has been applied. */
+    bool startPending;
+    /** Workspace SOE holding C_int (the C in alpha); only used through formAp. */
+    LinearSOE *soeC;
+    Vector *Vrep;
+    Vector *dVres;   // velocity shift of the resisting-force argument
+    Vector *A1next;  // alpha1*a_{n+1} from the reported velocity, reused by the next predictor
+    bool a1Valid;
+    /** -order2, set by a mid-analysis domainChanged: the domain velocity is the reported one; the next
+     *  newStep recovers v_alg = v_rep - gamma*dt*alpha1*a_n once it has formed alpha1*a_n. */
+    bool velRecoverPending;
+    double tStepStart;  // domain time at the start of the step (committed-time shift for ops_Dt)
+
+    int applyStartCorrection(void);
 
     int updateCount;
     double c1, c2, c3;

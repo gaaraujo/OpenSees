@@ -33,16 +33,20 @@
 #include <FEM_ObjectBroker.h>
 #include <elementAPI.h>
 #include <cstring>
+#include <cstdlib>
 #include <cmath>
 #define OPS_Export
 
 namespace {
 
-bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck)
+bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
+                               bool &order2, bool &initAccel)
 {
     updElemDisp = false;
     incrementalAccel = false;
     useAlphaCloseCheck = false;
+    order2 = false;
+    initAccel = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -54,9 +58,13 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
             incrementalAccel = true;
         } else if (strcmp(argvLoc, "-alphaCloseCheck") == 0) {
             useAlphaCloseCheck = true;
+        } else if (strcmp(argvLoc, "-order2") == 0) {
+            order2 = true;
+        } else if (strcmp(argvLoc, "-initAccel") == 0) {
+            initAccel = true;
         } else {
             opserr << "WARNING ExplicitAlpha family - unknown flag " << argvLoc
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
             return false;
         }
     }
@@ -72,7 +80,7 @@ void *OPS_ExplicitAlpha(void)
     int argc = OPS_GetNumRemainingInputArgs();
     if (argc < 4) {
         opserr << "WARNING - want: ExplicitAlpha $alphaF $alphaM $gamma $beta "
-                  "<-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck>\n";
+                  "<-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2>\n";
         return 0;
     }
 
@@ -109,12 +117,14 @@ void *OPS_ExplicitAlpha(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return 0;
     }
 
     theIntegrator = new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                      useAlphaCloseCheck);
+                                      useAlphaCloseCheck, order2, initAccel);
 
     if (theIntegrator == 0)
         opserr << "WARNING - out of memory creating ExplicitAlpha integrator\n";
@@ -126,7 +136,7 @@ void *OPS_KRAlphaExplicit(void)
 {
     if (OPS_GetNumRemainingInputArgs() < 1) {
         opserr << "WARNING - want KRAlphaExplicit $rhoInf <-updateElemDisp> <-incrementalAccel> "
-                  "<-alphaCloseCheck>\n";
+                  "<-alphaCloseCheck> <-order2>\n";
         return 0;
     }
 
@@ -147,18 +157,21 @@ void *OPS_KRAlphaExplicit(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return 0;
     }
 
-    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck);
+    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
+                             order2, initAccel);
 }
 
 void *OPS_MKRAlphaExplicit(void)
 {
     if (OPS_GetNumRemainingInputArgs() < 1) {
         opserr << "WARNING - want MKRAlphaExplicit $rhoInfEquivalent <-updateElemDisp> "
-                  "<-incrementalAccel> <-alphaCloseCheck>\n";
+                  "<-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
         return 0;
     }
 
@@ -183,41 +196,48 @@ void *OPS_MKRAlphaExplicit(void)
     bool updElemDisp = false;
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck)) {
+    bool order2 = false;
+    bool initAccel = false;
+    if (!parseExplicitAlphaOptions(updElemDisp, incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
         return 0;
     }
 
-    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck);
+    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
+                             order2, initAccel);
 }
 
 
 ExplicitAlpha::ExplicitAlpha(int classTag, double _alphaF, double _alphaM, double _gamma, double _beta,
-                             bool _updElemDisp, bool _incrementalAccel, bool _useAlphaCloseCheck)
+                             bool _updElemDisp, bool _incrementalAccel, bool _useAlphaCloseCheck,
+                             bool _order2, bool _initAccel)
     : TransientIntegrator(classTag),
       alphaM(_alphaM), alphaF(_alphaF), beta(_beta), gamma(_gamma),
       updElemDisp(_updElemDisp), incrementalAccel(_incrementalAccel),
-      useAlphaCloseCheck(_useAlphaCloseCheck), deltaT(0.0),
+      useAlphaCloseCheck(_useAlphaCloseCheck), order2(_order2), initAccel(_initAccel || _order2),
+      startPending(true), deltaT(0.0),
       alpha1(0), alpha3(0), Mhat(0),
       updateCount(0), initAlphaMatrices(1),
       c1(0.0), c2(0.0), c3(0.0),
       Ut(0), Utdot(0), Utdotdot(0),
       U(0), Udot(0), Udotdot(0),
       Ualpha(0), Ualphadot(0), Ualphadotdot(0),
-      Utdothat(0)
+      Utdothat(0),
+      Mmat(0), Cint(0), Vrep(0), work(0), dVres(0), tStepStart(-1.0)
 {
 }
 
 
 ExplicitAlpha::ExplicitAlpha()
-    : ExplicitAlpha(INTEGRATOR_TAGS_ExplicitAlpha, 0.5, 0.5, 0.5, 0.25, false, false, false)
+    : ExplicitAlpha(INTEGRATOR_TAGS_ExplicitAlpha, 0.5, 0.5, 0.5, 0.25, false, false, false, false, false)
 {
 }
 
 
 ExplicitAlpha::ExplicitAlpha(double _alphaF, double _alphaM, double _gamma, double _beta, bool _updElemDisp,
-                             bool _incrementalAccel, bool _useAlphaCloseCheck)
+                             bool _incrementalAccel, bool _useAlphaCloseCheck, bool _order2,
+                             bool _initAccel)
     : ExplicitAlpha(INTEGRATOR_TAGS_ExplicitAlpha, _alphaF, _alphaM, _gamma, _beta, _updElemDisp,
-                    _incrementalAccel, _useAlphaCloseCheck)
+                    _incrementalAccel, _useAlphaCloseCheck, _order2, _initAccel)
 {
 }
 
@@ -250,6 +270,16 @@ ExplicitAlpha::~ExplicitAlpha()
         delete Ualphadotdot;
     if (Utdothat != 0)
         delete Utdothat;
+    if (Mmat != 0)
+        delete Mmat;
+    if (Cint != 0)
+        delete Cint;
+    if (Vrep != 0)
+        delete Vrep;
+    if (work != 0)
+        delete work;
+    if (dVres != 0)
+        delete dVres;
 }
 
 
@@ -340,6 +370,34 @@ int ExplicitAlpha::newStep(double _deltaT)
         this->TransientIntegrator::formTangent(INITIAL_TANGENT);
         Matrix A(*tmp);
 
+        if (initAccel) {
+            const double c1s = c1, c2s = c2, c3s = c3;
+            if (order2) {
+                // C_int: the same damping that enters alpha (Rayleigh, element rate tangents, modal).
+                if (Cint == 0 || Cint->noRows() != size) {
+                    delete Cint;
+                    Cint = new Matrix(size, size);
+                }
+                c1 = 0.0;
+                c2 = 1.0;
+                c3 = 0.0;
+                this->TransientIntegrator::formTangent(INITIAL_TANGENT);
+                *Cint = *tmp;
+            }
+            if (Mmat == 0 || Mmat->noRows() != size) {
+                delete Mmat;
+                Mmat = new Matrix(size, size);
+            }
+            c1 = 0.0;
+            c2 = 0.0;
+            c3 = 1.0;
+            this->TransientIntegrator::formTangent(INITIAL_TANGENT);
+            *Mmat = *tmp;
+            c1 = c1s;
+            c2 = c2s;
+            c3 = c3s;
+        }
+
         if (areAlphaMFClose()) {
             // alpha_3 = (1 - alphaM) * I; Mhat = alphaM * M (matches ExplicitAlphaMultiSOE shortcut).
             alpha3->Zero();
@@ -391,6 +449,14 @@ int ExplicitAlpha::newStep(double _deltaT)
         initAlphaMatrices = 0;
     }
 
+    if (initAccel && startPending) {
+        if (this->applyStartCorrection() < 0) {
+            opserr << "WARNING ExplicitAlpha::newStep() - starting correction (-initAccel / -order2) failed\n";
+            return -8;
+        }
+        startPending = false;
+    }
+
     (*Ut) = *U;
     (*Utdot) = *Udot;
     (*Utdotdot) = *Udotdot;
@@ -408,6 +474,12 @@ int ExplicitAlpha::newStep(double _deltaT)
 
     Ualphadot->addVector(0.0, *Utdot, (1.0 - alphaF));
     Ualphadot->addVector(1.0, *Udot, alphaF);
+    // -order2: resisting-force velocity argument v_alpha + dv with dv = gamma*dt*alpha1*a_n
+    // (Utdothat = dt*alpha1*a_n is already formed). The C_int*dv part is restored in formUnbalance.
+    if (order2) {
+        dVres->addVector(0.0, *Utdothat, gamma);
+        Ualphadot->addVector(1.0, *dVres, 1.0);
+    }
 
     if (incrementalAccel)
         *Ualphadotdot = *Utdotdot;
@@ -422,10 +494,9 @@ int ExplicitAlpha::newStep(double _deltaT)
     time += alphaF * deltaT;
     // Domain::update(newTime, dT) ignores dT: it sets ops_Dt = newTime - committedTime = alphaF*dt,
     // while element states were committed at the previous alpha level, a full dt earlier. Materials
-    // that integrate over ops_Dt (ViscousDamper, Maxwell-type dampers, TDConcrete, friction
-    // bearings, ...) then run on a slowed clock. Shift the domain's committed time so ops_Dt = dt
-    // at the alpha-level evaluation (Domain::commit resets it; revertToLastStep restores it).
-    // -updateElemDisp commits at t_{n+1}, so ops_Dt = alphaF*dt is already right there.
+    // that integrate over ops_Dt (e.g. ViscousDamper) then run on a slowed clock. Shift the domain's
+    // committed time so ops_Dt = dt at the alpha-level evaluation (Domain::commit resets it).
+    // (-updateElemDisp commits at t_{n+1}, so ops_Dt = alphaF*dt is already right there.)
     if (!updElemDisp) {
         Domain *theDomain = theModel->getDomainPtr();
         if (theDomain != 0) {
@@ -442,13 +513,75 @@ int ExplicitAlpha::newStep(double _deltaT)
 }
 
 
+int ExplicitAlpha::applyStartCorrection()
+{
+    // Equilibrium acceleration at the start, M a0 = p(t0) - C v0 - f(u0, v0), a_alg0 = a0; with
+    // -order2 also the velocity-form start of the algorithmic state, v_alg0 = v0 - gamma*dt*alpha1*a0.
+    AnalysisModel *theModel = this->getAnalysisModel();
+    LinearSOE *theLinSOE = this->getLinearSOE();
+    if (theModel == 0 || theLinSOE == 0 || Mmat == 0 || work == 0)
+        return -1;
+
+    // Zero trial acceleration, so the residual is p - C v0 - f and a0 = M^{-1} R0 directly.
+    Udotdot->Zero();
+    // Elements that update from the trial-displacement increment (forceBeamColumn) skip their update
+    // when the increment is zero, so after setNodeDisp -commit they still hold the previous state and
+    // R0 would miss the imposed displacement. A tiny non-committing trial excursion makes them iterate
+    // to the committed configuration before R0 is formed.
+    {
+        Vector Up(*U);
+        for (int i = 0; i < Up.Size(); i++)
+            Up(i) += 1.0e-9 * (1.0 + fabs(Up(i)));
+        theModel->setResponse(Up, *Udot, *Udotdot);
+        if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
+            return -2;
+    }
+    theModel->setResponse(*U, *Udot, *Udotdot);
+    if (theModel->updateDomain(theModel->getCurrentDomainTime(), deltaT) < 0)
+        return -2;
+    if (this->TransientIntegrator::formUnbalance() < 0)
+        return -3;
+
+    Vector R0(theLinSOE->getB());
+    if (Mmat->Solve(R0, *Udotdot) < 0)
+        return -4;
+    if (getenv("OPS_ORDER2_VERBOSE") != 0)
+        opserr << "ExplicitAlpha start correction: |R0| = " << R0.Norm() << "  |a0| = " << Udotdot->Norm() << endln;
+
+    if (order2) {
+        Utdothat->addMatrixVector(0.0, *alpha1, *Udotdot, 1.0);
+        Udot->addVector(1.0, *Utdothat, -gamma * deltaT);
+    }
+
+    return 0;
+}
+
+
+int ExplicitAlpha::formUnbalance()
+{
+    if (this->TransientIntegrator::formUnbalance() < 0)
+        return -1;
+    if (!order2)
+        return 0;
+
+    // -order2: the trial velocity carried + dv into C v and f(u, v); add back C_int*dv so only
+    // the change of the rate tangent away from C_int is corrected.
+    LinearSOE *theLinSOE = this->getLinearSOE();
+    if (theLinSOE == 0 || Cint == 0 || work == 0 || dVres == 0)
+        return -2;
+    work->addMatrixVector(0.0, *Cint, *dVres, 1.0);
+    Vector b(theLinSOE->getB());
+    b.addVector(1.0, *work, 1.0);
+    theLinSOE->setB(b);
+    return 0;
+}
+
+
 int ExplicitAlpha::revertToLastStep()
 {
     // undo the committed-time shift of newStep (Domain::revertToLastCommit used the shifted time)
     if (tStepStart >= 0.0) {
-        AnalysisModel *theModel = this->getAnalysisModel();
-        Domain *theDomain = theModel ? theModel->getDomainPtr() : 0;
-        if (theDomain != 0) {
+        if (Domain *theDomain = this->getAnalysisModel() ? this->getAnalysisModel()->getDomainPtr() : 0) {
             theDomain->setCurrentTime(tStepStart);
             theDomain->setCommittedTime(tStepStart);
         }
@@ -666,6 +799,22 @@ int ExplicitAlpha::domainChanged()
         }
     }
 
+    if (initAccel) {
+        if (Vrep == 0 || Vrep->Size() != size) {
+            delete Vrep;
+            delete work;
+            delete dVres;
+            Vrep = new Vector(size);
+            work = new Vector(size);
+            dVres = new Vector(size);
+        }
+    }
+    if (order2) {
+        // Mid-analysis: the domain holds the reported velocity; recover the algorithmic one.
+        if (!startPending && deltaT > 0.0 && alpha1 != 0 && alpha1->noRows() == size)
+            Udot->addMatrixVector(1.0, *alpha1, *Udotdot, -gamma * deltaT);
+    }
+
     initAlphaMatrices = 1;
 
     return 0;
@@ -702,6 +851,16 @@ int ExplicitAlpha::update(const Vector &aiPlusOne)
         Udotdot->addVector(1.0, aiPlusOne, 1.0);
     } else {
         *Udotdot = aiPlusOne;
+    }
+
+    if (order2) {
+        // Report v = v_alg + gamma*dt*alpha1*a_alg; the alpha-level evaluation stays the committing one.
+        *Vrep = *Udot;
+        Vrep->addMatrixVector(1.0, *alpha1, *Udotdot, gamma * deltaT);
+        theModel->setVel(*Vrep);
+        theModel->setAccel(*Udotdot);
+        theModel->setDisp(*U);
+        return 0;
     }
 
     theModel->setVel(*Udot);
@@ -742,7 +901,7 @@ ExplicitAlpha::getVel()
 
 int ExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(7);
+    Vector data(9);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
@@ -750,6 +909,8 @@ int ExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
     data(4) = updElemDisp ? 1.0 : 0.0;
     data(5) = incrementalAccel ? 1.0 : 0.0;
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
+    data(7) = order2 ? 1.0 : 0.0;
+    data(8) = initAccel ? 1.0 : 0.0;
 
     if (theChannel.sendVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlpha::sendSelf() - could not send data\n";
@@ -762,7 +923,7 @@ int ExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
 
 int ExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-    Vector data(7);
+    Vector data(9);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlpha::recvSelf() - could not receive data\n";
         return -1;
@@ -775,6 +936,8 @@ int ExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &the
     updElemDisp = (data(4) > 0.5);
     incrementalAccel = (data(5) > 0.5);
     useAlphaCloseCheck = (data(6) > 0.5);
+    order2 = (data(7) > 0.5);
+    initAccel = (data(8) > 0.5) || order2;
 
     return 0;
 }
@@ -801,6 +964,8 @@ void ExplicitAlpha::Print(OPS_Stream &s, int flag)
             s << "  alphaCloseCheck: yes\n";
         else
             s << "  alphaCloseCheck: no\n";
+        s << "  order2: " << (order2 ? "yes" : "no") << endln;
+        s << "  initAccel: " << (initAccel ? "yes" : "no") << endln;
     } else
         s << "ExplicitAlpha - no associated AnalysisModel\n";
 }
@@ -819,6 +984,7 @@ int ExplicitAlpha::revertToStart()
         Udot->Zero();
     if (Udotdot != 0)
         Udotdot->Zero();
+    startPending = true;
 
     return 0;
 }

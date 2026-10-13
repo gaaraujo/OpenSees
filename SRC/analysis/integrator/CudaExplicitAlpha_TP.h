@@ -51,6 +51,8 @@ public:
     struct Options {
         bool incrementalAccel = false;   // solve returns Delta Uddot instead of total Uddot
         bool useAlphaCloseCheck = false; // enable alphaM ~= alphaF shortcut when |alphaM-alphaF| small
+        bool order2 = false;             // -order2 second-order corrections (implies initAccel)
+        bool initAccel = false;          // -initAccel equilibrium initial acceleration
     };
 
     CudaExplicitAlpha_TP();
@@ -88,6 +90,19 @@ protected:
     double gamma;
     bool incrementalAccel;
     bool useAlphaCloseCheck;
+    /** -order2: as CudaExplicitAlpha; both force ends use v + dv (the n end through the committed
+     *  reported velocity), nodal damping and getVel follow Vforce, and C_int*dv is added to Put.
+     *  Implies initAccel. */
+    bool order2;
+    /** -initAccel (or -order2): start from the equilibrium acceleration M a0 = p - C v0 - f(u0, v0). */
+    bool initAccel;
+    bool startPending;
+    Vector *Vrep;    // reported (committed) velocity
+    Vector *Vforce;  // velocity at the current force end
+    Vector *dVres;   // dv (host)
+    Vector *A1host;  // alpha1 * accel (host)
+
+    int applyStartCorrection(CudaBcsrLinSOE *cudaSOE);
 
     int updateCount;
     double c1, c2, c3;
@@ -111,6 +126,9 @@ protected:
     /** True when host U/Udot/Uddot were written without updating the GPU mirror
      *  (domainChanged, revert, gather). Cleared after newStepPredictor H2D. */
     bool deviceMotionStale;
+    /** -order2, set by a mid-analysis domainChanged: order2PreStep recovers
+     *  v_alg = v_rep - gamma*dt*alpha1*a_n (= v_rep - dv) on device and host. */
+    bool velRecoverPending;
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;
