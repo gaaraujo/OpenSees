@@ -47,7 +47,6 @@
 #include <cusparse.h>
 #include <thrust/device_vector.h>
 #include <thrust/memory.h>
-#include <thrust/fill.h>
 #include <vector>
 
 using thrust::raw_pointer_cast;
@@ -75,10 +74,10 @@ __global__ void kernelAxpy(int n, T alpha, const T *x, T *y)
 
 // Midpoint predictor + alpha-interpolated response at t + alphaF*dt.
 // alphaSol1 holds alpha^{-1} M Uddot_n; alphaSol2 holds alpha_3 Uddot_n when alphaM != alphaF.
-template<typename T, bool Shift>
+template<typename T>
 __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T *alphaSol2, T *U, T *Udot,
                               const T *Uddot, T *alphaSol1, T *Ualpha, T *Ualphadot, T *Ualphadotdot,
-                              int incrementalAccel, int alphaClose, T velShiftHat)
+                              int incrementalAccel, int alphaClose)
 {
     const int stride = blockDim.x * gridDim.x;
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
@@ -93,9 +92,7 @@ __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T 
         Udot[i] = udotn1;
         // Alpha-level kinematics for equilibrium evaluation
         Ualpha[i] = (static_cast<T>(1.0) - alphaF) * ut + alphaF * un1;
-        // -order2 (Shift): resisting-force velocity v_alpha + dv, dv = gamma*uhat = gamma*dt*alpha1*a_n
-        Ualphadot[i] = Shift ? (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1 + velShiftHat * uhat
-                             : (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1;
+        Ualphadot[i] = (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1;
         if (incrementalAccel) {
             Ualphadotdot[i] = utddot;
         } else if (alphaClose) {
@@ -140,8 +137,6 @@ struct CudaExplicitAlpha::ImplBase {
     virtual int newStepPredictor(CudaExplicitAlpha *integrator) = 0;
     virtual int formUnbalance(CudaBcsrLinSOE *cudaSOE) = 0;
     virtual int updateState(CudaBcsrLinSOE *cudaSOE, bool incrementalAccel) = 0;
-    virtual int addRateShift(CudaBcsrLinSOE *cudaSOE) = 0;
-    virtual int alpha1Accel(double *hostOut) = 0;
     virtual int applyStart(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) = 0;
     virtual void zeroState() = 0;
     virtual int getSize() const = 0;
@@ -155,9 +150,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     thrust::device_vector<T> d_state_cur;    // [U | Udot | Uddot]
     thrust::device_vector<T> d_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
     thrust::device_vector<T> d_w2;           // workspace for M^{-1} and solves
-    thrust::device_vector<T> d_w3;           // workspace for C_int products (-order2)
-    bool useMatC = false;                    // -order2: C_int operator built and bound
-    bool alpha1Cached = false;               // alphaSol1 holds alpha1*Uddot (from reporting), reusable once
     thrust::device_vector<T> d_alphaRhs;     // RHS for alpha-operator solve(s)
     thrust::device_vector<T> d_alphaSol;     // alphaSol1 [| alphaSol2]
     pinned_host_vector<double> h_state_cur;    // [U | Udot | Uddot]
@@ -169,7 +161,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     CudaCsrMatrix *matM = nullptr;             // mass operator M
     CudaCsrMatrix *matAlpha = nullptr;         // alpha = M + gamma*dt*C + beta*dt^2*K
     CudaCsrMatrix *matA = nullptr;             // A = alphaM*M + alphaF*gamma*dt*C + alphaF*beta*dt^2*K
-    CudaCsrMatrix *matC = nullptr;             // C_int, the C in alpha (-order2; spmv only)
     int boundStructureRows = 0;
     int boundStructureNnz = 0;
     const int *boundRowPtr = nullptr;
@@ -196,8 +187,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         d_state_cur.assign(motionSize, zero);
         d_state_alpha.assign(motionSize, zero);
         d_w2.assign(n, zero);
-        d_w3.clear();  // -order2 only (formOperators)
-        alpha1Cached = false;
         d_alphaRhs.assign(alphaNumRhs * n, zero);
         d_alphaSol.assign(alphaNumRhs * n, zero);
     }
@@ -247,18 +236,12 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (matA != nullptr) {
             matA->detachSharedSpmvPattern();
         }
-        if (matC != nullptr) {
-            matC->detachSharedSpmvPattern();
-        }
         delete matAlpha;
         delete matA;
-        delete matC;
         delete matM;
         matM = nullptr;
         matAlpha = nullptr;
         matA = nullptr;
-        matC = nullptr;
-        useMatC = false;
         boundStructureRows = 0;
         boundStructureNnz = 0;
         boundRowPtr = nullptr;
@@ -308,7 +291,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         }
     }
 
-    void ensureMatrices(CudaPrecision prec, bool withC)
+    void ensureMatrices(CudaPrecision prec)
     {
         initCusparse();
         if (matM == nullptr) {
@@ -323,11 +306,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
             makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
             matA = new CudaCsrMatrix(solver, spmv, exec);
-
-            if (withC) {  // C_int, -order2 only
-                makeMatrixConfigs(prec, solver, spmv, exec, matM->getSpmvBackend());
-                matC = new CudaCsrMatrix(solver, spmv, exec);
-            }
         }
     }
 
@@ -352,8 +330,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 matM->reset();
                 matAlpha->reset();
                 matA->reset();
-                if (matC != nullptr)
-                    matC->reset();
             }
             if (matM->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matM->bindStructure failed\n";
@@ -365,10 +341,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             }
             if (matA->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
                 opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matA->bindStructure failed\n";
-                return -1;
-            }
-            if (matC != nullptr && matC->bindStructure(size, nnz, rowPtr, colIdx) != 0) {
-                opserr << "ERROR CudaExplicitAlpha::bindSharedStructure - matC->bindStructure failed\n";
                 return -1;
             }
             boundStructureRows = size;
@@ -416,7 +388,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (gpuRc == 0) {
             cudaSOE->syncIndicesToDevice();
             cudaSOE->ensureDeviceVectorSizes();
-            ensureMatrices(cudaSOE->getPrecision(), integrator->order2);
+            ensureMatrices(cudaSOE->getPrecision());
             if (bindSharedStructure(cudaSOE) != 0)
                 gpuRc = -1;
         }
@@ -438,24 +410,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 gpuRc = -4;
             }
         }
-
-        // --- C_int (-order2; collective; spmv only). Assembled before A so the primary SOE
-        // still holds A for the solve. ---
-        if (integrator->order2) {
-            if (integrator->formTangentIntoSOE(INITIAL_TANGENT, 0.0, 1.0, 0.0) != 0)
-                return -7;
-            if (gpuRc == 0) {
-                cudaSOE->syncAValuesToDevice();
-                if (matC->copyValues(cudaSOE->getDeviceAValues()) != 0) {
-                    opserr << "ERROR CudaExplicitAlpha::formOperators - matC->copyValues failed\n";
-                    gpuRc = -7;
-                }
-            }
-            useMatC = (gpuRc == 0);
-            d_w3.assign(size, static_cast<T>(0.0));
-            rateShiftScale = static_cast<T>(integrator->gamma);
-        }
-        alpha1Cached = false;
 
         // --- A / Ã (collective; snapshot only) ---
         if (areClose) {
@@ -502,23 +456,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         return gpuRc;
     }
 
-    // -order2 after a mid-analysis domainChanged: Udot <- Udot - gamma*dt*alpha1*a_n on the device
-    // (alphaSol1 = alpha1*a_n) before the predictor uses it, and the same on the host step-start copy.
-    int recoverVelocity(CudaExplicitAlpha *integrator, const T *dAlphaSol1)
-    {
-        if (!integrator->velRecoverPending || size == 0)
-            return 0;
-        const T s = static_cast<T>(-integrator->gamma * integrator->deltaT);
-        kernelAxpy<<<gridBlocks(size), 256, 0, stream>>>(size, s, dAlphaSol1, devUdot());
-        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after velocity recovery");
-        std::vector<T> tmp(static_cast<std::size_t>(size));
-        thrust::copy(d_alphaSol.begin(), d_alphaSol.begin() + size, tmp.begin());
-        for (int i = 0; i < size; ++i)
-            (*integrator->Utdot)(i) += static_cast<double>(s) * static_cast<double>(tmp[i]);
-        integrator->velRecoverPending = false;
-        return 0;
-    }
-
     // GPU predictor: alpha_1 solve, then midpoint + alpha-interpolated kinematics.
     int newStepPredictor(CudaExplicitAlpha *integrator) override
     {
@@ -527,7 +464,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (size > 0 && integrator->deviceMotionStale) {
             d_state_cur = h_state_cur;
             integrator->deviceMotionStale = false;
-            alpha1Cached = false;
         }
         T *dU = devU();
         T *dUdot = devUdot();
@@ -547,42 +483,23 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const int incAccel = integrator->incrementalAccel ? 1 : 0;
         // Need alpha_3 = I - alpha^{-1} A only for non-incremental trial accel when alphaM != alphaF.
         const bool needAlpha3 = (incAccel == 0) && !alphaClose;
-        const T velShiftHat = integrator->order2 ? static_cast<T>(integrator->gamma) : static_cast<T>(0.0);
-        // -order2 already solved alpha * x = M * Uddot_n when reporting the velocity.
-        const bool reuseAlpha1 = alpha1Cached && !needAlpha3;
-        alpha1Cached = false;
 
-        if (!reuseAlpha1)
-            applyM(dUddot, dAlphaRhs);
+        applyM(dUddot, dAlphaRhs);
         if (needAlpha3) {
             matA->spmv(dUddot, dAlphaRhs + size);
             if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
                 return -5;
             }
-            if (recoverVelocity(integrator, dAlphaSol1) != 0)
-                return -5;
-            if (integrator->order2)
-                kernelNewStep<T, true><<<gridBlocks(size), 256, 0, stream>>>(
-                    size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU, dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
-                    dUalphadotdot, incAccel, 0, velShiftHat);
-            else
-                kernelNewStep<T, false><<<gridBlocks(size), 256, 0, stream>>>(
-                    size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU, dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
-                    dUalphadotdot, incAccel, 0, velShiftHat);
+            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU,
+                                                                dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
+                                                                dUalphadotdot, incAccel, 0);
         } else {
-            if (!reuseAlpha1 && matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
+            if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
                 return -5;
             }
-            if (recoverVelocity(integrator, dAlphaSol1) != 0)
-                return -5;
-            if (integrator->order2)
-                kernelNewStep<T, true><<<gridBlocks(size), 256, 0, stream>>>(
-                    size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
-                    dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0, velShiftHat);
-            else
-                kernelNewStep<T, false><<<gridBlocks(size), 256, 0, stream>>>(
-                    size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
-                    dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0, velShiftHat);
+            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(
+                size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
+                dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0);
         }
         // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
@@ -593,62 +510,16 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         return 0;
     }
 
-    // -order2: device B += C_int * dv, dv = gamma*uhat (alphaSol1 holds uhat after the predictor).
-    int addRateShift(CudaBcsrLinSOE *cudaSOE) override
-    {
-        if (!useMatC || matC == nullptr) {
-            return -7;
-        }
-        cudaSOE->syncBToDevice();
-        T *b = static_cast<T *>(cudaSOE->getDeviceB());
-        return addRateShiftDevice(b);
-    }
-
-    int addRateShiftDevice(T *b)
-    {
-        T *w3 = thrust::raw_pointer_cast(d_w3.data());
-        const T *x = static_cast<const T *>(thrust::raw_pointer_cast(d_alphaSol.data()));
-        if (matC->spmv(x, w3) != 0) {
-            return -7;
-        }
-        kernelAxpy<<<gridBlocks(size), 256, 0, stream>>>(size, rateShiftScale, static_cast<const T *>(w3), b);
-        return 0;
-    }
-
-    // -order2 reported velocity: alpha1 * Uddot_{n+1} into alphaSol1 (cached for the next
-    // predictor) and copied to the host.
-    int alpha1Accel(double *hostOut) override
-    {
-        T *dAlphaRhs = thrust::raw_pointer_cast(d_alphaRhs.data());
-        T *dAlphaSol1 = thrust::raw_pointer_cast(d_alphaSol.data());
-        if (alphaNumRhs > 1) {
-            thrust::fill(d_alphaRhs.begin() + size, d_alphaRhs.end(), static_cast<T>(0.0));
-        }
-        applyM(devUddot(), dAlphaRhs);
-        if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
-            return -1;
-        }
-        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -order2 alpha1 accel");
-        std::vector<T> tmp(static_cast<std::size_t>(size));
-        thrust::copy(d_alphaSol.begin(), d_alphaSol.begin() + size, tmp.begin());
-        for (int i = 0; i < size; ++i)
-            hostOut[i] = static_cast<double>(tmp[i]);
-        alpha1Cached = true;
-        return 0;
-    }
-
-    // -initAccel / -order2 start: host B holds R0 = p - C v0 - f(u0, v0) (zero trial accel).
-    // a0 = M^{-1} R0; with -order2 also Udot -= gamma*dt*alpha^{-1} M a0. Host mirror refreshed.
+    // -initAccel start: host B holds R0 = p - C v0 - f(u0, v0) (zero trial accel).
+    // a0 = M^{-1} R0. Host mirror refreshed.
     int applyStart(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) override
     {
-        if (matM == nullptr || !matM->isFactored() ||
-            (integrator->order2 && (matAlpha == nullptr || !matAlpha->isFactored()))) {
+        if (matM == nullptr || !matM->isFactored()) {
             return -1;
         }
         if (size > 0 && integrator->deviceMotionStale) {
             d_state_cur = h_state_cur;
             integrator->deviceMotionStale = false;
-            alpha1Cached = false;
         }
         cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
         cudaSOE->syncBToDevice();
@@ -656,26 +527,8 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (matM->solve(b, devUddot()) != 0) {
             return -2;
         }
-        if (!integrator->order2) {
-            cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -initAccel start");
-            h_state_cur = d_state_cur;
-            alpha1Cached = false;
-            return 0;
-        }
-        T *dAlphaRhs = thrust::raw_pointer_cast(d_alphaRhs.data());
-        T *dAlphaSol1 = thrust::raw_pointer_cast(d_alphaSol.data());
-        if (alphaNumRhs > 1) {
-            thrust::fill(d_alphaRhs.begin() + size, d_alphaRhs.end(), static_cast<T>(0.0));
-        }
-        applyM(devUddot(), dAlphaRhs);
-        if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
-            return -3;
-        }
-        kernelAxpy<<<gridBlocks(size), 256, 0, stream>>>(size, static_cast<T>(-integrator->gamma * integrator->deltaT),
-                                                         static_cast<const T *>(dAlphaSol1), devUdot());
-        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -order2 start");
+        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -initAccel start");
         h_state_cur = d_state_cur;
-        alpha1Cached = true;  // alphaSol1 = alpha1*a0, the first predictor's solve
         return 0;
     }
 
@@ -685,9 +538,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         cudaSOE->syncBToDevice();
         void *b = cudaSOE->getDeviceB();
         T *w2 = thrust::raw_pointer_cast(d_w2.data());
-        if (useMatC && addRateShiftDevice(static_cast<T *>(b)) != 0) {
-            return -7;  // -order2: Phat += C_int * dv
-        }
         if (matM == nullptr || !matM->isFactored()) {
             return -3;
         }
@@ -731,8 +581,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         return 0;
     }
 
-    T rateShiftScale = static_cast<T>(0.0);  // gamma, set by formOperators under -order2
-
     void zeroState() override
     {
         if (size <= 0) {
@@ -740,7 +588,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         }
         const T zero = static_cast<T>(0.0);
         d_state_cur.assign(static_cast<std::size_t>(kMotionFields * size), zero);
-        alpha1Cached = false;
     }
 };
 
@@ -787,8 +634,6 @@ int CudaExplicitAlpha::formOperators(CudaBcsrLinSOE *cudaSOE)
             return -1;
         if (formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0)
             return -3;
-        if (order2 && formTangentIntoSOE(INITIAL_TANGENT, 0.0, 1.0, 0.0) != 0)
-            return -7;
         if (areClose) {
             if (formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, alphaM) != 0)
                 return -5;
@@ -835,13 +680,11 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.incrementalAccel = true;
         } else if (strcmp(tok, "-alphaCloseCheck") == 0) {
             opts.useAlphaCloseCheck = true;
-        } else if (strcmp(tok, "-order2") == 0) {
-            opts.order2 = true;
         } else if (strcmp(tok, "-initAccel") == 0) {
             opts.initAccel = true;
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
             return false;
         }
     }
@@ -953,11 +796,8 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       updElemDisp(opts.updElemDisp),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
-      order2(opts.order2),
-      initAccel(opts.initAccel || opts.order2),
+      initAccel(opts.initAccel),
       startPending(true),
-      Vrep(new Vector(0)),
-      A1host(new Vector(0)),
       tStepStart(-1.0),
       updateCount(0),
       c1(0.0),
@@ -976,7 +816,6 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       operatorsBuilt(false),
       motionNeedsGather(true),
       deviceMotionStale(true),
-      velRecoverPending(false),
       m_impl(nullptr)
 {
 }
@@ -997,8 +836,6 @@ CudaExplicitAlpha::~CudaExplicitAlpha()
     delete Ualpha;
     delete Ualphadot;
     delete Ualphadotdot;
-    delete Vrep;
-    delete A1host;
 }
 
 bool CudaExplicitAlpha::areAlphaMFClose() const
@@ -1165,13 +1002,6 @@ int CudaExplicitAlpha::domainChanged()
                 (*Udotdot)(loc) = accel(i);
         }
     }
-    // -order2 mid-analysis: the domain holds the reported velocity v_alg + gamma*dt*alpha1*a; the
-    // predictor recovers the algorithmic one once it has solved for alpha1*a_n.
-    velRecoverPending = (order2 && !startPending && deltaT > 0.0);
-    if (order2) {
-        Vrep->resize(size);
-        A1host->resize(size);
-    }
     *Ut = *U;
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;
@@ -1180,9 +1010,8 @@ int CudaExplicitAlpha::domainChanged()
     return 0;
 }
 
-// -initAccel / -order2 starting correction (collective in OpenSeesMP): assemble R0 = p - C v0 - f(u0, v0)
-// with zero trial accel, merge to root, then a0 = M^{-1} R0 and (-order2 only) Udot -= gamma*dt*alpha^{-1} M a0
-// on the root GPU.
+// -initAccel starting correction (collective in OpenSeesMP): assemble R0 = p - C v0 - f(u0, v0)
+// with zero trial accel, merge to root, then a0 = M^{-1} R0 on the root GPU.
 int CudaExplicitAlpha::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
 {
     AnalysisModel *theModel = this->getAnalysisModel();
@@ -1300,7 +1129,7 @@ int CudaExplicitAlpha::newStep(double _deltaT)
 
     if (initAccel && startPending) {
         if (applyStartCorrection(cudaSOE) != 0) {
-            opserr << "ERROR CudaExplicitAlpha::newStep() - starting correction (-initAccel / -order2) failed\n";
+            opserr << "ERROR CudaExplicitAlpha::newStep() - starting correction (-initAccel) failed\n";
             return -7;
         }
         startPending = false;
@@ -1395,7 +1224,7 @@ int CudaExplicitAlpha::formUnbalance()
                 // A = alphaM*M; device B is the merged Phat (no Atilde*M^{-1} transform).
                 cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
                 cudaSOE->syncBToDevice();
-                rc = order2 ? m_impl->addRateShift(cudaSOE) : 0;
+                rc = 0;
             } else {
                 cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
                 rc = m_impl->formUnbalance(cudaSOE);
@@ -1411,10 +1240,7 @@ int CudaExplicitAlpha::formUnbalance()
     }
 
     if (areAlphaMFClose()) {
-        // serial: B already holds Phat; primary SOE has A = alphaM*M
-        if (order2)
-            return (m_impl != nullptr) ? m_impl->addRateShift(cudaSOE) : -1;
-        return 0;
+        return 0;  // serial: B already holds Phat; primary SOE has A = alphaM*M
     }
     if (m_impl == nullptr)
         return -1;
@@ -1449,26 +1275,6 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         } else {
             *Udotdot = aiPlusOne;
         }
-    }
-
-    if (order2) {
-        // Report v = v_alg + gamma*dt*alpha1*a_alg (the GPU solve is reused by the next predictor);
-        // the alpha-level evaluation stays the committing one.
-        *Vrep = *Udot;
-        int rc = 0;
-        if (cudaSOE->isCudaDeviceEnabled())
-            rc = (m_impl != nullptr) ? m_impl->alpha1Accel(&(*A1host)(0)) : -1;
-        if (auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE())) {
-            if (distSOE->broadcastFromRoot(*A1host) < 0)
-                return -5;
-        }
-        if (rc != 0)
-            return -5;
-        Vrep->addVector(1.0, *A1host, gamma * deltaT);
-        theModel->setVel(*Vrep);
-        theModel->setAccel(*Udotdot);
-        theModel->setDisp(*U);
-        return 0;
     }
 
     theModel->setVel(*Udot);
@@ -1528,7 +1334,7 @@ const Vector &CudaExplicitAlpha::getVel() { return *Ualphadot; }  // alpha-level
 
 int CudaExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(9);
+    Vector data(8);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
@@ -1536,14 +1342,13 @@ int CudaExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
     data(4) = updElemDisp ? 1.0 : 0.0;
     data(5) = incrementalAccel ? 1.0 : 0.0;
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(7) = order2 ? 1.0 : 0.0;
-    data(8) = initAccel ? 1.0 : 0.0;
+    data(7) = initAccel ? 1.0 : 0.0;
     return theChannel.sendVector(this->getDbTag(), cTag, data);
 }
 
 int CudaExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-    Vector data(9);
+    Vector data(8);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0) {
         return -1;
     }
@@ -1554,8 +1359,7 @@ int CudaExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker 
     updElemDisp = data(4) > 0.5;
     incrementalAccel = data(5) > 0.5;
     useAlphaCloseCheck = data(6) > 0.5;
-    order2 = data(7) > 0.5;
-    initAccel = data(8) > 0.5 || order2;
+    initAccel = data(7) > 0.5;
     operatorsBuilt = false;
     return 0;
 }
@@ -1564,7 +1368,7 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
     s << "CudaExplicitAlpha alphaF=" << alphaF << " alphaM=" << alphaM
-      << " order2=" << (order2 ? 1 : 0) << " initAccel=" << (initAccel ? 1 : 0);
+      << " initAccel=" << (initAccel ? 1 : 0);
     s << endln;
 }
 

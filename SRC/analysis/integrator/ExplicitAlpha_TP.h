@@ -53,7 +53,7 @@ class ExplicitAlpha_TP : public TransientIntegrator
 public:
     ExplicitAlpha_TP();
     ExplicitAlpha_TP(double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel = false, bool useAlphaCloseCheck = false, bool order2 = false,
+                     bool incrementalAccel = false, bool useAlphaCloseCheck = false,
                      bool initAccel = false);
 
     virtual ~ExplicitAlpha_TP();
@@ -85,8 +85,7 @@ public:
 
 protected:
     ExplicitAlpha_TP(int classTag, double alphaF, double alphaM, double gamma, double beta,
-                     bool incrementalAccel, bool useAlphaCloseCheck, bool order2 = false,
-                     bool initAccel = false);
+                     bool incrementalAccel, bool useAlphaCloseCheck, bool initAccel = false);
 
     double alphaM;
     double alphaF;
@@ -120,20 +119,11 @@ protected:
     Vector *Utdothat;
     Vector *Put;
 
-    /** -order2: same corrections as ExplicitAlpha. Both force ends use the velocity shifted by
-     *  dv = gamma*dt*alpha1*a_n; the n end gets it by committing the reported velocity v_alg + dv
-     *  at the previous step. Implies initAccel. */
-    bool order2;
-    /** -initAccel (or -order2): start from the equilibrium acceleration
+    /** -initAccel: start from the equilibrium acceleration
      *  M a0 = p(t0) - C v0 - f(u0, v0) instead of the committed acceleration. */
     bool initAccel;
     bool startPending;
     Matrix *Mmat;
-    Matrix *Cint;
-    Vector *dVres;   // velocity shift dv
-    Vector *Vforce;  // velocity handed to nodal damping / getVel at the current force end
-    Vector *Vrep;    // reported (and committed) velocity
-    Vector *work;
 
     int applyStartCorrection(void);
 };

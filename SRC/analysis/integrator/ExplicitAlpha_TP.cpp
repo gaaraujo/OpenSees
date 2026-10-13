@@ -37,12 +37,10 @@
 
 namespace {
 
-bool parseExplicitAlphaTPOptions(bool &incrementalAccel, bool &useAlphaCloseCheck, bool &order2,
-                                 bool &initAccel)
+bool parseExplicitAlphaTPOptions(bool &incrementalAccel, bool &useAlphaCloseCheck, bool &initAccel)
 {
     incrementalAccel = false;
     useAlphaCloseCheck = false;
-    order2 = false;
     initAccel = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
@@ -53,13 +51,11 @@ bool parseExplicitAlphaTPOptions(bool &incrementalAccel, bool &useAlphaCloseChec
             incrementalAccel = true;
         } else if (strcmp(argvLoc, "-alphaCloseCheck") == 0) {
             useAlphaCloseCheck = true;
-        } else if (strcmp(argvLoc, "-order2") == 0) {
-            order2 = true;
         } else if (strcmp(argvLoc, "-initAccel") == 0) {
             initAccel = true;
         } else {
             opserr << "WARNING ExplicitAlpha_TP family - unknown flag " << argvLoc
-                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-order2> <-initAccel>\n";
+                   << "; want <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
             return false;
         }
     }
@@ -111,14 +107,13 @@ void *OPS_ExplicitAlpha_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
     bool initAccel = false;
-    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
+    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, initAccel)) {
         return 0;
     }
 
     theIntegrator = new ExplicitAlpha_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck,
-                                         order2, initAccel);
+                                         initAccel);
 
     if (theIntegrator == 0)
         opserr << "WARNING - out of memory creating ExplicitAlpha_TP integrator\n";
@@ -149,13 +144,12 @@ void *OPS_KRAlphaExplicit_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
     bool initAccel = false;
-    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
+    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, initAccel)) {
         return 0;
     }
 
-    return new ExplicitAlpha_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2, initAccel);
+    return new ExplicitAlpha_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, initAccel);
 }
 
 void *OPS_MKRAlphaExplicit_TP(void)
@@ -186,19 +180,18 @@ void *OPS_MKRAlphaExplicit_TP(void)
 
     bool incrementalAccel = false;
     bool useAlphaCloseCheck = false;
-    bool order2 = false;
     bool initAccel = false;
-    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, order2, initAccel)) {
+    if (!parseExplicitAlphaTPOptions(incrementalAccel, useAlphaCloseCheck, initAccel)) {
         return 0;
     }
 
-    return new ExplicitAlpha_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, order2, initAccel);
+    return new ExplicitAlpha_TP(alphaF, alphaM, gamma, beta, incrementalAccel, useAlphaCloseCheck, initAccel);
 }
 
 
 ExplicitAlpha_TP::ExplicitAlpha_TP(int classTag, double _alphaF, double _alphaM, double _gamma,
                                    double _beta, bool _incrementalAccel, bool _useAlphaCloseCheck,
-                                   bool _order2, bool _initAccel)
+                                   bool _initAccel)
     : TransientIntegrator(classTag),
       alphaM(_alphaM), alphaF(_alphaF), beta(_beta), gamma(_gamma),
       incrementalAccel(_incrementalAccel), useAlphaCloseCheck(_useAlphaCloseCheck), deltaT(0.0),
@@ -209,8 +202,8 @@ ExplicitAlpha_TP::ExplicitAlpha_TP(int classTag, double _alphaF, double _alphaM,
       Ut(0), Utdot(0), Utdotdot(0),
       U(0), Udot(0), Udotdot(0),
       Utdothat(0), Put(0),
-      order2(_order2), initAccel(_initAccel || _order2), startPending(true),
-      Mmat(0), Cint(0), dVres(0), Vforce(0), Vrep(0), work(0)
+      initAccel(_initAccel), startPending(true),
+      Mmat(0)
 {
 }
 
@@ -222,10 +215,9 @@ ExplicitAlpha_TP::ExplicitAlpha_TP()
 
 
 ExplicitAlpha_TP::ExplicitAlpha_TP(double _alphaF, double _alphaM, double _gamma, double _beta,
-                                   bool _incrementalAccel, bool _useAlphaCloseCheck, bool _order2,
-                                   bool _initAccel)
+                                   bool _incrementalAccel, bool _useAlphaCloseCheck, bool _initAccel)
     : ExplicitAlpha_TP(INTEGRATOR_TAGS_ExplicitAlpha_TP, _alphaF, _alphaM, _gamma, _beta,
-                       _incrementalAccel, _useAlphaCloseCheck, _order2, _initAccel)
+                       _incrementalAccel, _useAlphaCloseCheck, _initAccel)
 {
 }
 
@@ -255,11 +247,6 @@ ExplicitAlpha_TP::~ExplicitAlpha_TP()
     if (Put != 0)
         delete Put;
     delete Mmat;
-    delete Cint;
-    delete dVres;
-    delete Vforce;
-    delete Vrep;
-    delete work;
 }
 
 
@@ -352,20 +339,8 @@ int ExplicitAlpha_TP::newStep(double _deltaT)
         Matrix A(*tmp);
 
         if (initAccel) {
-            // M (start correction) and, with -order2, C_int (the C in alpha), assembled into the
-            // same temporary full SOE
+            // M (start correction), assembled into the same temporary full SOE
             const double c1s = c1, c2s = c2, c3s = c3;
-            if (order2) {
-                if (Cint == 0 || Cint->noRows() != size) {
-                    delete Cint;
-                    Cint = new Matrix(size, size);
-                }
-                c1 = 0.0;
-                c2 = 1.0;
-                c3 = 0.0;
-                this->TransientIntegrator::formTangent(INITIAL_TANGENT);
-                *Cint = *tmp;
-            }
             if (Mmat == 0 || Mmat->noRows() != size) {
                 delete Mmat;
                 Mmat = new Matrix(size, size);
@@ -432,7 +407,7 @@ int ExplicitAlpha_TP::newStep(double _deltaT)
 
     if (initAccel && startPending) {
         if (this->applyStartCorrection() < 0) {
-            opserr << "WARNING ExplicitAlpha_TP::newStep() - starting correction (-initAccel / -order2) failed\n";
+            opserr << "WARNING ExplicitAlpha_TP::newStep() - starting correction (-initAccel) failed\n";
             return -8;
         }
         startPending = false;
@@ -443,13 +418,6 @@ int ExplicitAlpha_TP::newStep(double _deltaT)
     (*Utdotdot) = *Udotdot;
 
     Utdothat->addMatrixVector(0.0, *alpha1, *Utdotdot, deltaT);
-    if (order2) {
-        // dv = gamma*dt*alpha1*a_n. The n end is evaluated at the committed state, whose velocity
-        // is the reported v_alg_n + dv; nodal damping gets the same.
-        dVres->addVector(0.0, *Utdothat, gamma);
-        *Vforce = *Utdot;
-        Vforce->addVector(1.0, *dVres, 1.0);
-    }
 
     residD = residR = residP = 1.0;
     residM = 0.0;
@@ -473,13 +441,7 @@ int ExplicitAlpha_TP::newStep(double _deltaT)
         Udotdot->addVector(0.0, *Utdotdot, (1.0 - alphaM) / alphaF);
     else
         Udotdot->addMatrixVector(0.0, *alpha3, *Utdotdot, 1.0 / alphaF);
-    if (order2) {
-        // n+1 end: v_alg_{n+1} + dv (a_n stands in for a_{n+1})
-        *Vforce = *Udot;
-        Vforce->addVector(1.0, *dVres, 1.0);
-        theModel->setResponse(*U, *Vforce, *Udotdot);
-    } else
-        theModel->setResponse(*U, *Udot, *Udotdot);
+    theModel->setResponse(*U, *Udot, *Udotdot);
 
     time += deltaT;
     if (theModel->updateDomain(time, deltaT) < 0) {
@@ -492,30 +454,18 @@ int ExplicitAlpha_TP::newStep(double _deltaT)
 
     Put->addVector(1.0 - alphaF, theLinSOE->getB(), alphaF);
 
-    // -order2: both ends carried + dv into C v and f(u, v); add back C_int*dv.
-    if (order2) {
-        work->addMatrixVector(0.0, *Cint, *dVres, 1.0);
-        Put->addVector(1.0, *work, 1.0);
-    }
-
     return 0;
 }
 
 
 int ExplicitAlpha_TP::applyStartCorrection()
 {
-    // M a0 = p(t0) - C v0 - f(u0, v0) with zero trial acceleration, a_alg0 = a0. With -order2 also
-    // v_alg0 = v0 - gamma*dt*alpha1*a0, and the domain keeps the prescribed v0 = v_alg0 + dv_0, which
-    // is the n-end velocity of the first step; without it v stays v0.
+    // M a0 = p(t0) - C v0 - f(u0, v0) with zero trial acceleration, a_alg0 = a0; v stays v0.
     AnalysisModel *theModel = this->getAnalysisModel();
     LinearSOE *theLinSOE = this->getLinearSOE();
-    if (theModel == 0 || theLinSOE == 0 || Mmat == 0 || (order2 && work == 0))
+    if (theModel == 0 || theLinSOE == 0 || Mmat == 0)
         return -1;
 
-    if (order2) {
-        *Vrep = *Udot;    // prescribed v0
-        *Vforce = *Udot;  // nodal damping at v0
-    }
     Udotdot->Zero();
     residD = residR = residP = 1.0;
     residM = 0.0;
@@ -540,15 +490,7 @@ int ExplicitAlpha_TP::applyStartCorrection()
     if (Mmat->Solve(R0, *Udotdot) < 0)
         return -4;
 
-    if (order2) {
-        work->addMatrixVector(0.0, *alpha1, *Udotdot, 1.0);
-        Udot->addVector(1.0, *work, -gamma * deltaT);
-        // n-end of the first step: v_alg0 + dv_0 (= v0) and a0, so the inertia terms cancel
-        *Vrep = *Udot;
-        Vrep->addVector(1.0, *work, gamma * deltaT);
-        theModel->setResponse(*U, *Vrep, *Udotdot);
-    } else
-        theModel->setResponse(*U, *Udot, *Udotdot);
+    theModel->setResponse(*U, *Udot, *Udotdot);
     return 0;
 }
 
@@ -655,7 +597,7 @@ int ExplicitAlpha_TP::formNodUnbalance(DOF_Group *theDof)
     theDof->zeroUnbalance();
 
     theDof->addPtoUnbalance(residP);
-    theDof->addD_Force(order2 ? *Vforce : *Udot, -residD);
+    theDof->addD_Force(*Udot, -residD);
     theDof->addM_Force(*Udotdot, -residM);
 
     return 0;
@@ -793,24 +735,6 @@ int ExplicitAlpha_TP::domainChanged()
         }
     }
 
-    if (order2) {
-        if (Vrep == 0 || Vrep->Size() != size) {
-            delete Vrep;
-            delete Vforce;
-            delete dVres;
-            delete work;
-            Vrep = new Vector(size);
-            Vforce = new Vector(size);
-            dVres = new Vector(size);
-            work = new Vector(size);
-        }
-    }
-    if (order2) {
-        // Mid-analysis: the domain holds the reported velocity; recover the algorithmic one.
-        if (!startPending && deltaT > 0.0 && alpha1 != 0 && alpha1->noRows() == size)
-            Udot->addMatrixVector(1.0, *alpha1, *Udotdot, -gamma * deltaT);
-    }
-
     initAlphaMatrices = 1;
 
     return 0;
@@ -849,13 +773,6 @@ int ExplicitAlpha_TP::update(const Vector &aiPlusOne)
         *Udotdot = aiPlusOne;
     }
 
-    if (order2) {
-        // Commit the reported velocity v_alg + gamma*dt*alpha1*a: it is also the n-end velocity of
-        // the next step.
-        *Vrep = *Udot;
-        Vrep->addMatrixVector(1.0, *alpha1, *Udotdot, gamma * deltaT);
-        theModel->setVel(*Vrep);
-    }
     theModel->setAccel(*Udotdot);
     if (theModel->updateDomain() < 0) {
         opserr << "WARNING ExplicitAlpha_TP::update() - failed to update the domain\n";
@@ -883,21 +800,20 @@ int ExplicitAlpha_TP::commit(void)
 const Vector &
 ExplicitAlpha_TP::getVel()
 {
-    return order2 ? *Vforce : *Udot;
+    return *Udot;
 }
 
 
 int ExplicitAlpha_TP::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(8);
+    Vector data(7);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
     data(3) = gamma;
     data(4) = incrementalAccel ? 1.0 : 0.0;
     data(5) = useAlphaCloseCheck ? 1.0 : 0.0;
-    data(6) = order2 ? 1.0 : 0.0;
-    data(7) = initAccel ? 1.0 : 0.0;
+    data(6) = initAccel ? 1.0 : 0.0;
 
     if (theChannel.sendVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlpha_TP::sendSelf() - could not send data\n";
@@ -910,7 +826,7 @@ int ExplicitAlpha_TP::sendSelf(int cTag, Channel &theChannel)
 
 int ExplicitAlpha_TP::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
-    Vector data(8);
+    Vector data(7);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0) {
         opserr << "WARNING ExplicitAlpha_TP::recvSelf() - could not receive data\n";
         return -1;
@@ -922,8 +838,7 @@ int ExplicitAlpha_TP::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &
     gamma = data(3);
     incrementalAccel = (data(4) > 0.5);
     useAlphaCloseCheck = (data(5) > 0.5);
-    order2 = (data(6) > 0.5);
-    initAccel = (data(7) > 0.5) || order2;
+    initAccel = (data(6) > 0.5);
 
     residM = 0.0;
     residD = alphaF;
@@ -951,7 +866,6 @@ void ExplicitAlpha_TP::Print(OPS_Stream &s, int flag)
             s << "  alphaCloseCheck: yes\n";
         else
             s << "  alphaCloseCheck: no\n";
-        s << "  order2: " << (order2 ? "yes" : "no") << endln;
         s << "  initAccel: " << (initAccel ? "yes" : "no") << endln;
     } else
         s << "ExplicitAlpha_TP - no associated AnalysisModel\n";
