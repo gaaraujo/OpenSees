@@ -51,6 +51,7 @@ class Matrix;
 class ExplicitAlpha : public TransientIntegrator
 {
 public:
+    void setNoSecondPass(bool f) { noSecondPass = f; }
     ExplicitAlpha();
     ExplicitAlpha(double alphaF, double alphaM, double gamma, double beta,
                   bool updElemDisp = false, bool incrementalAccel = false,
@@ -98,6 +99,7 @@ protected:
     }
 
     bool updElemDisp;
+    bool noSecondPass = false;  // -noSecondPass (see update())
     /** If true, trial accel is Uddot_n and the linear solve returns Delta Uddot. */
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */

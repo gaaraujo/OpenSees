@@ -39,6 +39,14 @@
 
 namespace {
 
+bool s_noSecondPass = false;
+template <class T> T *markOnePass(T *p)
+{
+    if (p != 0)
+        p->setNoSecondPass(s_noSecondPass);
+    return p;
+}
+
 bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
                                bool &initAccel)
 {
@@ -46,6 +54,7 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
     incrementalAccel = false;
     useAlphaCloseCheck = false;
     initAccel = false;
+    s_noSecondPass = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -59,9 +68,12 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
             useAlphaCloseCheck = true;
         } else if (strcmp(argvLoc, "-initAccel") == 0) {
             initAccel = true;
+        } else if (strcmp(argvLoc, "-noSecondPass") == 0) {
+            s_noSecondPass = true;
         } else {
             opserr << "WARNING ExplicitAlpha family - unknown flag " << argvLoc
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
+                      " <-noSecondPass>\n";
             return false;
         }
     }
@@ -119,8 +131,8 @@ void *OPS_ExplicitAlpha(void)
         return 0;
     }
 
-    theIntegrator = new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                      useAlphaCloseCheck, initAccel);
+    theIntegrator = markOnePass(new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                      useAlphaCloseCheck, initAccel));
 
     if (theIntegrator == 0)
         opserr << "WARNING - out of memory creating ExplicitAlpha integrator\n";
@@ -158,8 +170,8 @@ void *OPS_KRAlphaExplicit(void)
         return 0;
     }
 
-    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
-                             initAccel);
+    return markOnePass(new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
+                             initAccel));
 }
 
 void *OPS_MKRAlphaExplicit(void)
@@ -196,8 +208,8 @@ void *OPS_MKRAlphaExplicit(void)
         return 0;
     }
 
-    return new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
-                             initAccel);
+    return markOnePass(new ExplicitAlpha(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel, useAlphaCloseCheck,
+                             initAccel));
 }
 
 
@@ -776,9 +788,11 @@ int ExplicitAlpha::update(const Vector &aiPlusOne)
         *Udotdot = aiPlusOne;
     }
 
+    // -noSecondPass: skip the element update in update() (OpenSees' second pass at (u_{n+alpha}, v_{n+1}));
+    // the alpha-level evaluation of newStep is then the committing one: the method as published.
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
-    if (theModel->updateDomain() < 0) {
+    if (!noSecondPass && theModel->updateDomain() < 0) {
         opserr << "ExplicitAlpha::update() - failed to update the domain\n";
         return -5;
     }

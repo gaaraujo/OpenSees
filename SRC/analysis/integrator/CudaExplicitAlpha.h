@@ -41,6 +41,7 @@ public:
         bool incrementalAccel = false;
         bool useAlphaCloseCheck = false;
         bool initAccel = false;
+        bool noSecondPass = false;
     };
 
     CudaExplicitAlpha();
@@ -75,6 +76,7 @@ protected:
     double beta;
     double gamma;
     bool updElemDisp;
+    bool noSecondPass;  // -noSecondPass (see update())
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     bool initAccel;     // -initAccel: start from the equilibrium acceleration M a0 = p - C v0 - f
