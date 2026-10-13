@@ -117,6 +117,7 @@ extern void *OPS_ConfinedConcrete01Material(void);
 extern void *OPS_ElasticBilin(void);
 extern void *OPS_SelfCenteringMaterial(void);
 extern void *OPS_MinMaxMaterial(void);
+extern void *OPS_PenaltyMaterial(void);
 extern void *OPS_SimpleFractureMaterial(void);
 extern void *OPS_HoehlerStanton(void);
 extern void *OPS_InitStrainMaterial(void);
@@ -494,6 +495,13 @@ TclModelBuilderUniaxialMaterialCommand (ClientData clientData, Tcl_Interp *inter
       else 
 	return TCL_ERROR;
 
+    }
+    if ((strcmp(argv[1],"PenaltyMaterial") == 0) || (strcmp(argv[1],"Penalty") == 0)) {
+      void *theMat = OPS_PenaltyMaterial();
+      if (theMat != 0)
+	theMaterial = (UniaxialMaterial *)theMat;
+      else
+	return TCL_ERROR;
     }
     if ((strcmp(argv[1],"SimpleFractureMaterial") == 0) || (strcmp(argv[1],"SimpleFracture") == 0)) {
 
