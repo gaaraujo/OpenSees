@@ -75,7 +75,7 @@ __global__ void kernelAxpy(int n, T alpha, const T *x, T *y)
 
 // Midpoint predictor + alpha-interpolated response at t + alphaF*dt.
 // alphaSol1 holds alpha^{-1} M Uddot_n; alphaSol2 holds alpha_3 Uddot_n when alphaM != alphaF.
-template<typename T>
+template<typename T, bool Shift>
 __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T *alphaSol2, T *U, T *Udot,
                               const T *Uddot, T *alphaSol1, T *Ualpha, T *Ualphadot, T *Ualphadotdot,
                               int incrementalAccel, int alphaClose, T velShiftHat)
@@ -93,9 +93,9 @@ __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T 
         Udot[i] = udotn1;
         // Alpha-level kinematics for equilibrium evaluation
         Ualpha[i] = (static_cast<T>(1.0) - alphaF) * ut + alphaF * un1;
-        // -order2: resisting-force velocity v_alpha + dv, dv = gamma*uhat = gamma*dt*alpha1*a_n
-        // (velShiftHat = gamma; 0 without -order2)
-        Ualphadot[i] = (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1 + velShiftHat * uhat;
+        // -order2 (Shift): resisting-force velocity v_alpha + dv, dv = gamma*uhat = gamma*dt*alpha1*a_n
+        Ualphadot[i] = Shift ? (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1 + velShiftHat * uhat
+                             : (static_cast<T>(1.0) - alphaF) * utdot + alphaF * udotn1;
         if (incrementalAccel) {
             Ualphadotdot[i] = utddot;
         } else if (alphaClose) {
@@ -196,7 +196,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         d_state_cur.assign(motionSize, zero);
         d_state_alpha.assign(motionSize, zero);
         d_w2.assign(n, zero);
-        d_w3.assign(n, zero);
+        d_w3.clear();  // -order2 only (formOperators)
         alpha1Cached = false;
         d_alphaRhs.assign(alphaNumRhs * n, zero);
         d_alphaSol.assign(alphaNumRhs * n, zero);
@@ -452,6 +452,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 }
             }
             useMatC = (gpuRc == 0);
+            d_w3.assign(size, static_cast<T>(0.0));
             rateShiftScale = static_cast<T>(integrator->gamma);
         }
         alpha1Cached = false;
@@ -560,18 +561,28 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             }
             if (recoverVelocity(integrator, dAlphaSol1) != 0)
                 return -5;
-            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU,
-                                                                dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
-                                                                dUalphadotdot, incAccel, 0, velShiftHat);
+            if (integrator->order2)
+                kernelNewStep<T, true><<<gridBlocks(size), 256, 0, stream>>>(
+                    size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU, dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
+                    dUalphadotdot, incAccel, 0, velShiftHat);
+            else
+                kernelNewStep<T, false><<<gridBlocks(size), 256, 0, stream>>>(
+                    size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU, dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
+                    dUalphadotdot, incAccel, 0, velShiftHat);
         } else {
             if (!reuseAlpha1 && matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
                 return -5;
             }
             if (recoverVelocity(integrator, dAlphaSol1) != 0)
                 return -5;
-            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(
-                size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
-                dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0, velShiftHat);
+            if (integrator->order2)
+                kernelNewStep<T, true><<<gridBlocks(size), 256, 0, stream>>>(
+                    size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
+                    dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0, velShiftHat);
+            else
+                kernelNewStep<T, false><<<gridBlocks(size), 256, 0, stream>>>(
+                    size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
+                    dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0, velShiftHat);
         }
         // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
@@ -1157,8 +1168,10 @@ int CudaExplicitAlpha::domainChanged()
     // -order2 mid-analysis: the domain holds the reported velocity v_alg + gamma*dt*alpha1*a; the
     // predictor recovers the algorithmic one once it has solved for alpha1*a_n.
     velRecoverPending = (order2 && !startPending && deltaT > 0.0);
-    Vrep->resize(size);
-    A1host->resize(size);
+    if (order2) {
+        Vrep->resize(size);
+        A1host->resize(size);
+    }
     *Ut = *U;
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;

@@ -195,8 +195,8 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         d_put.assign(n, zero);
         d_alphaRhs.assign(alphaNumRhs * n, zero);
         d_alphaSol.assign(alphaNumRhs * n, zero);
-        d_dv.assign(n, zero);
-        d_w3.assign(n, zero);
+        d_dv.clear();  // -order2 only (formOperators)
+        d_w3.clear();
         alpha1Ready = false;
         h_put.assign(static_cast<std::size_t>(n), 0.0);
     }
@@ -431,6 +431,8 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
                 return -7;
             }
             useMatC = true;
+            d_dv.assign(size, static_cast<T>(0.0));
+            d_w3.assign(size, static_cast<T>(0.0));
         }
         alpha1Ready = false;
 
@@ -1214,14 +1216,16 @@ int CudaExplicitAlpha_TP::domainChanged()
     // -order2 mid-analysis: the domain holds the reported velocity v_alg + gamma*dt*alpha1*a; the
     // algorithmic one is recovered in order2PreStep, which forms dv = gamma*dt*alpha1*a_n.
     velRecoverPending = (order2 && !startPending && deltaT > 0.0);
-    Vrep->resize(size);
-    Vforce->resize(size);
-    dVres->resize(size);
-    A1host->resize(size);
-    Vrep->Zero();
-    Vforce->Zero();
-    dVres->Zero();
-    A1host->Zero();
+    if (order2) {
+        Vrep->resize(size);
+        Vforce->resize(size);
+        dVres->resize(size);
+        A1host->resize(size);
+        Vrep->Zero();
+        Vforce->Zero();
+        dVres->Zero();
+        A1host->Zero();
+    }
     *Ut = *U;
     *Utdot = *Udot;
     *Utdotdot = *Udotdot;
@@ -1237,8 +1241,11 @@ int CudaExplicitAlpha_TP::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     residD = residR = residP = 1.0;
     residM = 0.0;
-    *Vrep = *Udot;    // prescribed v0
-    *Vforce = *Udot;  // nodal damping at v0
+    if (order2) {
+        *Vrep = *Udot;    // prescribed v0
+        *Vforce = *Udot;  // nodal damping at v0
+    }
+    double *hostA1 = order2 ? &(*A1host)(0) : nullptr;  // alpha1*a0, -order2 only
     Udotdot->Zero();  // zero trial accel: residual p - C v0 - f
     deviceMotionStale = true;
     // Elements that update from the trial-displacement increment (forceBeamColumn) skip their update
@@ -1267,7 +1274,7 @@ int CudaExplicitAlpha_TP::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
         Vector status(1);
         if (distSOE->getProcessID() == 0) {
             if (rc == 0)
-                rc = (m_impl != nullptr) ? m_impl->applyStart(this, cudaSOE, &(*A1host)(0)) : -5;
+                rc = (m_impl != nullptr) ? m_impl->applyStart(this, cudaSOE, hostA1) : -5;
             status(0) = (rc == 0) ? 1.0 : -1.0;
         }
         if (distSOE->broadcastFromRoot(status) < 0)
@@ -1275,12 +1282,12 @@ int CudaExplicitAlpha_TP::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
         if (status(0) < 0.0)
             return -4;
         if (distSOE->broadcastFromRoot(*Udot) < 0 || distSOE->broadcastFromRoot(*Udotdot) < 0 ||
-            distSOE->broadcastFromRoot(*A1host) < 0)
+            (order2 && distSOE->broadcastFromRoot(*A1host) < 0))
             return -3;
     } else {
         if (m_impl == nullptr)
             return -5;
-        rc = m_impl->applyStart(this, cudaSOE, &(*A1host)(0));
+        rc = m_impl->applyStart(this, cudaSOE, hostA1);
         if (rc != 0)
             return rc;
     }
