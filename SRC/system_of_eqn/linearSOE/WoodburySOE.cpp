@@ -487,8 +487,16 @@ WoodburySOE::solve(void)
     if (woodburySolver == nullptr)
         hookWoodburySolver();
     if (woodburySolver == nullptr) {
-        opserr << "WARNING WoodburySOE::solve() - WoodburySolver not installed\n";
-        return -1;
+        // Inner SOEs that solve internally (DistributedCudaBcsrLinSOE owns its CUDA SOE and
+        // has no LinearSOESolver): same steps as WoodburySolver::solve.
+        if (innerSOE == nullptr || innerSOE->getSolver() != nullptr) {
+            opserr << "WARNING WoodburySOE::solve() - WoodburySolver not installed\n";
+            return -1;
+        }
+        const int r = innerSOE->solve();
+        if (r < 0)
+            return r;
+        return applyWoodburyCorrection();
     }
     return woodburySolver->solve();
 }

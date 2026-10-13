@@ -3938,7 +3938,8 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 #ifdef _PARALLEL_INTERPRETERS
       int soeTag = theSOE->getClassTag();
       if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-          soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+          soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+          soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
         theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
       } else {
         theTransientAnalysis->setWoodburyParallel(-1, 0, 0);
@@ -8918,7 +8919,8 @@ modalDamping(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **arg
   if (theTransientAnalysis != 0 && theSOE != 0) {
     int soeTag = theSOE->getClassTag();
     if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE) {
+        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+        soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
       theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
     } else {
       theTransientAnalysis->setWoodburyParallel(-1, 0, 0);

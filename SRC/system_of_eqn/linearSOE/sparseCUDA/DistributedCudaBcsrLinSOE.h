@@ -50,6 +50,8 @@ public:
     void zeroB(void) override;
     const Vector &getX(void) override;
     const Vector &getB(void) override;
+    /** localOnly=true: this rank's RHS, without the gather of getB() (WoodburySOE snapshots). */
+    const Vector &getB(bool localOnly) override;
     double normRHS(void) override;
     void setX(int loc, double value) override;
     void setX(const Vector &x) override;
@@ -118,8 +120,11 @@ private:
     double *workArea;
     int sizeWork;
 
+    /** myB holds myBsize entries plus one header slot, so solve() sends the RHS and the
+     *  worker's triplet count in one message (myVectBHeader views all myBsize+1 entries). */
     double *myB;
     Vector *myVectB;
+    Vector *myVectBHeader;
     int myBsize;
 
     /** Worker: assembled sparse contributions keyed by (row,col). */
