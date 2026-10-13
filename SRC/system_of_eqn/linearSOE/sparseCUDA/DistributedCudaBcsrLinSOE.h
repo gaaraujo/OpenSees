@@ -118,8 +118,11 @@ private:
     double *workArea;
     int sizeWork;
 
+    /** myB holds myBsize entries plus one header slot, so solve() sends the RHS and the
+     *  worker's triplet count in one message (myVectBHeader views all myBsize+1 entries). */
     double *myB;
     Vector *myVectB;
+    Vector *myVectBHeader;
     int myBsize;
 
     /** Worker: assembled sparse contributions keyed by (row,col). */

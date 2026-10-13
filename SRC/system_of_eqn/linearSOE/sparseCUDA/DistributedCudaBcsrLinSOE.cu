@@ -38,7 +38,7 @@ DistributedCudaBcsrLinSOE::DistributedCudaBcsrLinSOE(CudaBcsrLinSOE *theSOE)
       theCudaSOE(theSOE),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0),
+      myB(0), myVectB(0), myVectBHeader(0), myBsize(0),
       globalRhsOnDevice(false)
 {
     if (theCudaSOE == nullptr) {
@@ -51,7 +51,7 @@ DistributedCudaBcsrLinSOE::DistributedCudaBcsrLinSOE()
       theCudaSOE(0),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0),
+      myB(0), myVectB(0), myVectBHeader(0), myBsize(0),
       globalRhsOnDevice(false)
 {
 }
@@ -69,6 +69,9 @@ DistributedCudaBcsrLinSOE::~DistributedCudaBcsrLinSOE()
 
     if (myVectB != 0)
         delete myVectB;
+
+    if (myVectBHeader != 0)
+        delete myVectBHeader;
 
     delete theCudaSOE;
 }
@@ -91,11 +94,15 @@ DistributedCudaBcsrLinSOE::ensureMyBSize(int size)
         delete[] myB;
     if (myVectB != 0)
         delete myVectB;
+    if (myVectBHeader != 0)
+        delete myVectBHeader;
 
-    myB = new double[size];
+    // One extra slot: the header that solve() appends to the RHS message.
+    myB = new double[size + 1];
     myVectB = new Vector(myB, size);
+    myVectBHeader = new Vector(myB, size + 1);
     myBsize = size;
-    for (int i = 0; i < size; ++i)
+    for (int i = 0; i <= size; ++i)
         myB[i] = 0.0;
 }
 
@@ -543,15 +550,21 @@ DistributedCudaBcsrLinSOE::solve(void)
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        if (!skipBMerge)
-            theChannel->sendVector(0, 0, *myVectB);
-
-        if (sendA) {
-            const int nTrip = static_cast<int>(tripletMap.size());
+        const int nTrip = sendA ? static_cast<int>(tripletMap.size()) : 0;
+        if (!skipBMerge) {
+            // Header after the RHS: -1 if the matrix is unchanged on this rank, else the
+            // number of triplets that follow. Rank 0 reads it instead of its own status,
+            // so the triplet messages cannot go unmatched.
+            myB[myBsize] = sendA ? static_cast<double>(nTrip) : -1.0;
+            theChannel->sendVector(0, 0, *myVectBHeader);
+        } else if (sendA) {
+            // RHS already on the device (CudaMKR): no RHS message to carry the header.
             ID nTripID(1);
             nTripID(0) = nTrip;
             theChannel->sendID(0, 0, nTripID);
+        }
 
+        if (sendA) {
             if (nTrip > 0) {
                 ID rows(nTrip);
                 ID cols(nTrip);
@@ -591,36 +604,49 @@ DistributedCudaBcsrLinSOE::solve(void)
         theCudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
     }
 
-    ensureWorkArea(myBsize);
-    Vector remoteB(myBsize);
+    ensureWorkArea(myBsize + 1);
+    Vector remoteBHeader(workArea, myBsize + 1);
+    Vector remoteB(workArea, myBsize);
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
+        int nTrip = 0;
+        bool workerSendsA = sendA;
         if (!skipBMerge) {
-            theChannel->recvVector(0, 0, remoteB);
+            theChannel->recvVector(0, 0, remoteBHeader);
             vectB += remoteB;
-        }
-
-        if (sendA) {
+            const double header = workArea[myBsize];
+            workerSendsA = header >= 0.0;
+            nTrip = workerSendsA ? static_cast<int>(header) : 0;
+        } else if (sendA) {
             ID nTripID(1);
             theChannel->recvID(0, 0, nTripID);
-            const int nTrip = nTripID(0);
+            nTrip = nTripID(0);
             if (nTrip < 0) {
                 opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - invalid nTrip\n";
                 result(0) = -1;
                 continue;
             }
-            if (nTrip > 0) {
-                ID rows(nTrip);
-                ID cols(nTrip);
-                Vector vals(nTrip);
-                theChannel->recvID(0, 0, rows);
-                theChannel->recvID(0, 0, cols);
-                theChannel->recvVector(0, 0, vals);
-                if (result(0) == 0 &&
-                    mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
-                    result(0) = -1;
-                }
+        }
+
+        if (workerSendsA != sendA) {
+            // A rank skipped (or repeated) its assembly: fail on every rank instead of
+            // merging a partial matrix. The triplets are still received below.
+            opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - matrix status of rank "
+                   << j + 1 << " differs from rank 0\n";
+            result(0) = -1;
+        }
+
+        if (nTrip > 0) {
+            ID rows(nTrip);
+            ID cols(nTrip);
+            Vector vals(nTrip);
+            theChannel->recvID(0, 0, rows);
+            theChannel->recvID(0, 0, cols);
+            theChannel->recvVector(0, 0, vals);
+            if (result(0) == 0 &&
+                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
+                result(0) = -1;
             }
         }
     }
