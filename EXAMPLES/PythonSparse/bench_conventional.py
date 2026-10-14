@@ -259,7 +259,12 @@ def _relres(kw):
 
 
 TCL_CONFIGS = {"compiled CuDSS (Tcl)": "system CuDSS",
-               "compiled CuDSS spd (Tcl)": "system CuDSS -matrixType spd"}
+               "compiled CuDSS spd (Tcl)": "system CuDSS -matrixType spd",
+               # dFFI: float factorization; -irNSteps adds iterative refinement in double
+               "compiled CuDSS dFFI (Tcl)": "system CuDSS -precision dFFI",
+               "compiled CuDSS spd dFFI (Tcl)": "system CuDSS -matrixType spd -precision dFFI",
+               "compiled CuDSS spd dFFI ir2 (Tcl)":
+                   "system CuDSS -matrixType spd -precision dFFI -irNSteps 2"}
 
 
 # ---------------------------------------------------------------------------

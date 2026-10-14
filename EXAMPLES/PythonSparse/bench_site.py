@@ -314,16 +314,27 @@ def analysis(ops, system_args, algorithm, material="elastic", motion=None, dyn_s
     return out
 
 
+def tcl_input(motion=None) -> str:
+    """Tcl twin of :func:`add_input` (define before ``partition`` under OpenSeesMP)."""
+    motion = motion or Motion.sweep()
+    vals = " ".join(repr(v) for v in motion.values)
+    return (f"timeSeries Path 2 -dt {motion.dt!r} -values {{{vals}}} "
+            f"-factor {INPUT_FACTOR * dashpot_coefficient()!r}\n"
+            f"pattern Plain 2 2 {{ load {base_master()} 1.0 0.0 0.0 }}\n")
+
+
 def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
-                 start_time=None, dyn_dt=DYN_DT):
+                 start_time=None, dyn_dt=DYN_DT, numberer="RCM", input_defined=False,
+                 rank0_only=False):
     """Tcl twin of :func:`analysis`; prints one RESULT line per phase:
-    ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``."""
+    ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``
+    (only from rank 0 with ``rank0_only``, for OpenSeesMP)."""
     motion = motion or Motion.sweep()
     start_time = motion.strong_start() if start_time is None else start_time
-    vals = " ".join(repr(v) for v in motion.values)
+    guard = "if {[getPID] == 0} " if rank0_only else "if {1} "
 
     def setup(test):
-        return "\n".join(["wipeAnalysis", "constraints Transformation", "numberer RCM",
+        return "\n".join(["wipeAnalysis", "constraints Transformation", f"numberer {numberer}",
                           system_line, "test " + " ".join(map(str, test)),
                           f"algorithm {algorithm}",
                           f"integrator Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}",
@@ -339,8 +350,8 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
             "  set total [expr $total + $dt_us]",
             "  lappend times [expr $dt_us * 1e-6]", "  lappend iters [testIter]",
             "  if {$ok != 0} break", "}",
-            f'puts "RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
-            'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"',
+            guard + f'{{puts "RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
+            'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"}',
             "if {$ok != 0} {exit}",
         ])
 
@@ -353,9 +364,8 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
     if material == "pimy":
         lines += [stage(1), run("gravity_plastic", GRAVITY_PLASTIC_STEPS, GRAVITY_DT)]
     if dyn_steps > 0:
-        lines += [f"setTime {start_time!r}",
-                  f"timeSeries Path 2 -dt {motion.dt!r} -values {{{vals}}} "
-                  f"-factor {INPUT_FACTOR * dashpot_coefficient()!r}",
-                  f"pattern Plain 2 2 {{ load {base_master()} 1.0 0.0 0.0 }}",
-                  setup(DYN_TEST), run("transient", dyn_steps, dyn_dt)]
+        lines.append(f"setTime {start_time!r}")
+        if not input_defined:
+            lines.append(tcl_input(motion))
+        lines += [setup(DYN_TEST), run("transient", dyn_steps, dyn_dt)]
     return "\n".join(lines) + "\n"
