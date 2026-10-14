@@ -220,6 +220,8 @@ def main() -> int:
                                   "iterations": iterations(solver), "error": err})
                     if dt > args.max_call_seconds or err:
                         break
+                    if sum(1 for c in calls if c["ok"] != 0) >= 2:
+                        break     # failing solver: two failed calls are enough evidence
                 rec = {"matrix": Path(path).name, "n": n, "nnz": int(A.nnz), "asym": asym,
                        "config": name, "rtol": rtol if inexact else None, "calls": calls,
                        "ordering": ordering}
