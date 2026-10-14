@@ -375,7 +375,7 @@ def instrument(solver, timers: StepTimers, stages: bool, relres: bool = False):
 
 
 def is_inexact(config):
-    return any(s in config for s in ("cg", "hybrid", "float32", "AmgX"))
+    return any(s in config for s in ("cg", "gmres", "hybrid", "float32", "AmgX", "pyamg"))
 
 
 def run_python(material, size, alg_name, config, motion, steps):
