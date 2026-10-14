@@ -51,11 +51,14 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
-if os.environ.get("OPENSEESPY_PATH"):
-    sys.path.insert(0, os.environ["OPENSEESPY_PATH"])
-    import opensees as ops  # noqa: E402
-else:
-    import openseespy.opensees as ops  # noqa: E402
+try:
+    if os.environ.get("OPENSEESPY_PATH"):
+        sys.path.insert(0, os.environ["OPENSEESPY_PATH"])
+        import opensees as ops  # noqa: E402
+    else:
+        import openseespy.opensees as ops  # noqa: E402
+except ImportError:  # bench_matrices.py only needs the solver configurations
+    ops = None
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_site as bs  # noqa: E402
