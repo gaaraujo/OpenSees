@@ -74,9 +74,9 @@ def package_linear_solvers() -> list[tuple[str, object]]:
 
     out = [
         ("pkg scipy.spsolve", lambda: spsolve()),
-        ("pkg scipy.cg+ilu", lambda: cg(rtol=1e-12, M=precond.ilu)),
-        ("pkg scipy.gmres+ilu", lambda: gmres(rtol=1e-12, restart=50, M=precond.ilu)),
-        ("pkg hybrid(scipy.spsolve)", lambda: hybrid(spsolve(), rtol=1e-12)),
+        ("pkg scipy.cg+ilu", lambda: cg(rtol=1e-8, M=precond.ilu)),
+        ("pkg scipy.gmres+ilu", lambda: gmres(rtol=1e-8, restart=50, M=precond.ilu)),
+        ("pkg hybrid(scipy.spsolve)", lambda: hybrid(spsolve(), rtol=1e-8)),
     ]
     try:
         from openseespy_solvers.scipy import umfpack
@@ -87,21 +87,22 @@ def package_linear_solvers() -> list[tuple[str, object]]:
         pass
     if gpu_available():
         from openseespy_solvers import cupy as ocp
+        from openseespy_solvers.cupy import precond as cupy_precond
 
         out += [
-            ("pkg cupy.cg+jacobi", lambda: ocp.cg(rtol=1e-12, M=ocp.precond.jacobi)),
-            ("pkg cupy.gmres+jacobi", lambda: ocp.gmres(rtol=1e-12, restart=50,
-                                                         M=ocp.precond.jacobi)),
+            ("pkg cupy.cg+jacobi", lambda: ocp.cg(rtol=1e-8, M=cupy_precond.jacobi)),
+            ("pkg cupy.gmres+jacobi", lambda: ocp.gmres(rtol=1e-8, restart=50,
+                                                         M=cupy_precond.jacobi)),
             ("pkg cupy.spsolve", lambda: ocp.spsolve()),
         ]
         try:
-            from openseespy_solvers.nvmath import direct_solve
+            from openseespy_solvers.nvmath import direct_solver
 
             out += [
                 ("pkg nvmath general", lambda: direct_solver()),
                 ("pkg nvmath symmetric", lambda: direct_solver(matrix_type="symmetric")),
                 ("pkg nvmath spd", lambda: direct_solver(matrix_type="spd")),
-                ("pkg hybrid(nvmath)", lambda: hybrid(direct_solver(), rtol=1e-12)),
+                ("pkg hybrid(nvmath)", lambda: hybrid(direct_solver(), rtol=1e-8)),
             ]
         except ImportError:
             pass
@@ -116,6 +117,7 @@ def package_eigen_solvers() -> list[tuple[str, object]]:
     out = [("pkg scipy.eigsh", lambda: eigsh())]
     if gpu_available():
         from openseespy_solvers import cupy as ocp
+        from openseespy_solvers.cupy import precond as cupy_precond
 
         out.append(("pkg cupy.eigsh (general)", lambda: ocp.eigsh(mass_mode="general")))
     return out
