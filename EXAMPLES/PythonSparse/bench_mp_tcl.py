@@ -81,7 +81,8 @@ def script(material, size, alg, system_line, motion, steps, nproc=None, workdir=
                               dyn_steps=steps, numberer=NUMBERER, input_defined=True,
                               rank0_only=True, result_file=RESULT_FILE,
                               dyn_integrator=integ, dyn_algorithm=dyn_alg,
-                              trace_node=bs.top_node(refine, plan) if TRACE else None))
+                              trace_node=[bs.top_node(refine, plan), bs.base_master(refine)]
+                              if TRACE else None))
 
 
 def parse(text):
@@ -179,10 +180,14 @@ def main() -> int:
                                     "integrator": INTEGRATOR,
                                     "build": "slab" if SLAB else "partition",
                                     "wall_seconds": time.perf_counter() - t0})
-                        traces = glob.glob(os.path.join(workdir, "trace_*.txt"))
-                        if traces:
-                            rec["trace_top_ux"] = [float(v) for v in
-                                                   open(traces[0]).read().strip().split(",") if v]
+                        if TRACE:
+                            refine, plan = SIZES[size]
+                            for key, node in (("trace_top_ux", bs.top_node(refine, plan)),
+                                              ("trace_base_ux", bs.base_master(refine))):
+                                files = glob.glob(os.path.join(workdir, f"trace_*_{node}.txt"))
+                                if files:
+                                    rec[key] = [float(v) for v in
+                                                open(files[0]).read().strip().split(",") if v]
                         out.write(json.dumps(rec) + "\n")
                         out.flush()
                         msg = rec.get("error", "")[:200] if rec["ok"] < -1 else " ".join(

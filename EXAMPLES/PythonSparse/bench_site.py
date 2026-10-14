@@ -418,8 +418,9 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
     (only from rank 0 with ``rank0_only``, for OpenSeesMP). With ``result_file`` the
     lines are also appended to that file, which other ranks' output cannot interleave.
     ``dyn_integrator`` / ``dyn_algorithm`` replace Newmark / ``algorithm`` in the transient
-    phase only (gravity keeps them). ``trace_node``: the rank holding that node writes its
-    x displacement after every transient step to trace_<pid>.txt (outside the timing)."""
+    phase only (gravity keeps them). ``trace_node`` (a node tag or a list of tags): the rank
+    holding each node writes its x displacement after every transient step to
+    trace_<pid>_<node>.txt (outside the timing)."""
     motion = motion or Motion.sweep()
     start_time = motion.strong_start() if start_time is None else start_time
     guard = "if {[getPID] == 0} " if rank0_only else "if {1} "
@@ -434,23 +435,25 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
                 'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"')
         to_file = (f"; set fh [open {{{result_file}}} a]; puts $fh {line}; close $fh"
                    if result_file else "")
-        trace = trace_node is not None and name == "transient"
+        nodes = ([trace_node] if isinstance(trace_node, int) else list(trace_node or [])) \
+            if name == "transient" else []
+        pre = [f"set has{n} [expr {{[lsearch -exact [getNodeTags] {n}] >= 0}}]; set tr{n} {{}}"
+               for n in nodes]
+        rec = [f"  if {{$has{n}}} {{lappend tr{n} [format %.10e [nodeDisp {n} 1]]}}" for n in nodes]
+        post = [f"if {{$has{n}}} {{set fh [open trace_[getPID]_{n}.txt w]; puts $fh [join $tr{n} ,]; "
+                "close $fh}" for n in nodes]
         return "\n".join([
-            "set iters {}", "set times {}", "set ok 0", "set total 0", "set trace {}",
-            (f"set hasTrace [expr {{[lsearch -exact [getNodeTags] {trace_node}] >= 0}}]"
-             if trace else "set hasTrace 0"),
+            "set iters {}", "set times {}", "set ok 0", "set total 0", *pre,
             f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
             "  set t [clock microseconds]",
             f"  set ok [analyze 1 {dt}]",
             "  set dt_us [expr [clock microseconds] - $t]",
             "  set total [expr $total + $dt_us]",
             "  lappend times [expr $dt_us * 1e-6]", "  lappend iters [testIter]",
-            f"  if {{$hasTrace}} {{lappend trace [format %.10e [nodeDisp {trace_node} 1]]}}"
-            if trace else "",
+            *rec,
             "  if {$ok != 0} break", "}",
             guard + f"{{puts {line}{to_file}}}",
-            ('if {$hasTrace} {set fh [open trace_[getPID].txt w]; puts $fh [join $trace ,]; '
-             'close $fh}') if trace else "",
+            *post,
             "if {$ok != 0} {exit}",
         ])
 
