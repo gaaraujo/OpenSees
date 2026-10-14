@@ -281,7 +281,15 @@ def run_benchmark(
         neq = ops.systemSize()
     except AttributeError:
         neq = -1
-    
+
+    # The probe above leaves a Diagonal system in the analysis. Rebuild the
+    # analysis components eigen uses (everything except algorithm and test),
+    # otherwise the default eigen solver works on the wrong system.
+    ops.wipeAnalysis()
+    ops.constraints("Plain")
+    ops.numberer("RCM")
+    ops.system("BandGeneral")
+
     # Run eigen analysis
     start_time = time.perf_counter()
     eigenvalues = None
