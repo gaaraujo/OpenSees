@@ -1325,6 +1325,7 @@ if(MPI_FOUND)
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSolver.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSOE.cpp
       ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSolver.cpp
+      ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseCSR/MumpsCsrBackend.cpp
       ${OPS_SRC_DIR}/domain/subdomain/ActorSubdomain.cpp
       ${OPS_SRC_DIR}/domain/subdomain/ShadowSubdomain.cpp
     )
