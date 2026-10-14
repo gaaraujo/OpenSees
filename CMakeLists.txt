@@ -842,6 +842,12 @@ endif()
 # OpenSeesPy Module
 #
 
+# Opt-in: OpenSeesPy with MPI parallel interpreters (partition(), Mumps,
+# DistributedPythonSparse). Off by default, so the serial module and the
+# other targets are built exactly as before. Configured after
+# add_subdirectory(SRC) below.
+option(OPENSEESPY_MPI "Build OpenSeesPy with MPI parallel interpreters" OFF)
+
 add_library(OpenSeesPy SHARED EXCLUDE_FROM_ALL
     ${OPS_SRC_DIR}/interpreter/PythonModule.cpp
     ${OPS_SRC_DIR}/actor/objectBroker/FEM_ObjectBrokerAllClasses.cpp
@@ -851,6 +857,7 @@ set_target_properties(OpenSeesPy PROPERTIES PREFIX "")
 
 target_include_directories(OpenSeesPy PUBLIC ${Python_INCLUDE_DIRS})
 
+if(NOT OPENSEESPY_MPI)
 target_link_libraries(OpenSeesPy
    OpenSeesLIB
    OPS_SysOfEqnPython   
@@ -862,6 +869,7 @@ target_link_libraries(OpenSeesPy
    Eigen3::Eigen	
    ${Python_LIBRARIES}
 )
+endif()
 
 
 #
@@ -898,6 +906,101 @@ set_target_properties(${OPS_FINAL_TARGET} PROPERTIES EXCLUDE_FROM_ALL OFF)
 
 # Add sources to targets
 add_subdirectory(${OPS_SRC_DIR})
+
+#
+# OpenSeesPy with MPI (OPENSEESPY_MPI=ON)
+#
+# The interpreter sources are compiled a second time with
+# _PARALLEL_INTERPRETERS (OPS_INTERPRETER_PI) and linked into OpenSeesPy in
+# place of OPS_INTERPRETER, together with the MPI objects OpenSeesMP uses.
+# partition() from Python calls the METIS 5 API, so METIS 5 is required
+# (set METIS5_ROOT if it is not in a default location); its metis.h is used
+# only by these objects, ahead of the bundled METIS 4 header.
+#
+if(OPENSEESPY_MPI)
+  if(NOT MPI_FOUND)
+    message(FATAL_ERROR "OPENSEESPY_MPI=ON requires MPI")
+  endif()
+
+  find_path(OPENSEESPY_METIS5_INCLUDE_DIR metis.h
+    HINTS ${METIS5_ROOT} ENV METIS5_ROOT PATH_SUFFIXES include)
+  find_library(OPENSEESPY_METIS5_LIBRARY metis
+    HINTS ${METIS5_ROOT} ENV METIS5_ROOT PATH_SUFFIXES lib lib64)
+  set(_opspy_metis5 FALSE)
+  if(OPENSEESPY_METIS5_INCLUDE_DIR AND OPENSEESPY_METIS5_LIBRARY)
+    file(READ "${OPENSEESPY_METIS5_INCLUDE_DIR}/metis.h" _opspy_metis_h)
+    if(_opspy_metis_h MATCHES "METIS_SetDefaultOptions")
+      set(_opspy_metis5 TRUE)
+    endif()
+  endif()
+  if(NOT _opspy_metis5)
+    message(FATAL_ERROR "OPENSEESPY_MPI=ON requires METIS 5 (metis.h and libmetis); "
+                        "install it (e.g. libmetis-dev) or set METIS5_ROOT")
+  endif()
+  set(_opspy_mpi_include "${CMAKE_BINARY_DIR}/openseespy_mpi/include")
+  configure_file("${OPENSEESPY_METIS5_INCLUDE_DIR}/metis.h"
+                 "${_opspy_mpi_include}/metis.h" COPYONLY)
+
+  set(_opspy_mpi_defs _PARALLEL_INTERPRETERS ${MUMPS_FLAG})
+  if(DEFINED OPENMPI)
+    list(APPEND _opspy_mpi_defs _OPENMPI)
+  endif()
+  set(_opspy_mpi_includes ${_opspy_mpi_include} ${MPI_CXX_INCLUDE_DIRS}
+                          ${MUMPS_DIR}/_deps/mumps-src/include)
+
+  get_target_property(_opspy_interp_sources OPS_INTERPRETER SOURCES)
+  add_library(OPS_INTERPRETER_PI OBJECT EXCLUDE_FROM_ALL ${_opspy_interp_sources})
+  target_include_directories(OPS_INTERPRETER_PI BEFORE PRIVATE ${_opspy_mpi_includes})
+  target_include_directories(OPS_INTERPRETER_PI PRIVATE
+    $<TARGET_PROPERTY:OPS_INTERPRETER,INCLUDE_DIRECTORIES>)
+  target_compile_definitions(OPS_INTERPRETER_PI PRIVATE ${_opspy_mpi_defs}
+    $<TARGET_PROPERTY:OPS_INTERPRETER,COMPILE_DEFINITIONS>)
+  target_compile_options(OPS_INTERPRETER_PI PRIVATE ${MPI_CXX_COMPILE_FLAGS})
+
+  get_target_property(_opspy_lib_links OpenSeesLIB LINK_LIBRARIES)
+  list(TRANSFORM _opspy_lib_links REPLACE "^OPS_INTERPRETER$" "OPS_INTERPRETER_PI")
+  add_library(OpenSeesLIB_Py EXCLUDE_FROM_ALL)
+  target_compile_definitions(OpenSeesLIB_Py PUBLIC _UMFPACK_DLONG)
+  target_link_libraries(OpenSeesLIB_Py ${_opspy_lib_links})
+
+  target_sources(OpenSeesPy PRIVATE
+    ${OPS_SRC_DIR}/actor/channel/MPI_Channel.cpp
+    ${OPS_SRC_DIR}/actor/machineBroker/MPI_MachineBroker.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/diagonal/MPIDiagonalSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/mumps/MumpsParallelSolver.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSuperLU.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSparseGenColLinSOE.cpp
+    ${OPS_SRC_DIR}/system_of_eqn/linearSOE/sparseGEN/DistributedSparseGenRowLinSOE.cpp
+  )
+  target_include_directories(OpenSeesPy BEFORE PRIVATE ${_opspy_mpi_includes})
+  target_compile_definitions(OpenSeesPy PRIVATE ${_opspy_mpi_defs})
+  target_compile_options(OpenSeesPy PRIVATE ${MPI_CXX_COMPILE_FLAGS})
+  if(NOT DEFINED MUMPS_DIR)
+    add_dependencies(OpenSeesPy mumps)
+  endif()
+  target_link_libraries(OpenSeesPy
+    OpenSeesLIB_Py
+    OPS_SysOfEqnPython
+    OPS_Reliability
+    OPS_Recorder
+    OPS_Numerics
+    HDF5::HDF5
+    ZLIB::ZLIB
+    Eigen3::Eigen
+    ${OPENSEESPY_METIS5_LIBRARY}
+    SUPERLU_DIST
+    ${MUMPS_LIBRARIES}
+    ${SCALAPACK_LIBRARIES}
+    ${MPI_CXX_LIBRARIES}
+    ${MPI_Fortran_LIBRARIES}
+    ${Python_LIBRARIES}
+  )
+  message(STATUS "OpenSeesPy: MPI parallel interpreters ON (METIS 5: ${OPENSEESPY_METIS5_LIBRARY})")
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
