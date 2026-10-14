@@ -4,11 +4,15 @@
    (laminar sides => no lateral strain): u_top = sum over layers of
    integral(sigma_v / M) dz, with M = E (1 - nu) / ((1 + nu) (1 - 2 nu)).
 2. Compiled UmfPack vs a hand-written PythonSparse solver: same displacements
-   through gravity and the dynamic window.
-3. The Tcl twin through OpenSees.exe (``--tcl-exe``) gives the same numbers.
-4. The PIMY variant: runs, iterations per step, tangent asymmetry.
+   through gravity and the transient window.
+3. The Tcl twin through OpenSees.exe (--tcl-exe) gives the same numbers.
+4. Compliant base: with the elastic column, the base horizontal velocity
+   follows v_base = factor * v_record - (velocity radiated back into the rock);
+   checked loosely as a sign/magnitude sanity check (|v_base| <= factor * max|v|).
+5. The PIMY variant: runs, iterations per step, tangent asymmetry.
 
-    python check_site_model.py [--tcl-exe path\\to\\OpenSees.exe]
+Usage:
+    python check_site_model.py [--tcl-exe OpenSees.exe] [--motion velocityHistory.out]
 """
 
 from __future__ import annotations
@@ -32,6 +36,8 @@ else:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_site as bs  # noqa: E402
+
+MOTION = None
 
 
 class Probe:
@@ -65,40 +71,48 @@ def top_center_node(refine):
 
 def analytic_settlement():
     props = bs.layer_props("elastic")
-    z_top = bs.ZMIN + sum(L[4] for L in bs.LAYERS)
-    u = 0.0
-    z0 = bs.ZMIN
     gammas = [p[2] * 9.81 for p in props]  # kN/m^3 (rho in t/m^3)
-    tops = []
+    u, z0, tops = 0.0, bs.ZMIN, []
     for L in bs.LAYERS:
-        tops.append(z0 + L[4])
         z0 += L[4]
+        tops.append(z0)
     for k, (E, nu, _rho, _G) in enumerate(props):
         M = E * (1 - nu) / ((1 + nu) * (1 - 2 * nu))
-        zb, zt = tops[k] - bs.LAYERS[k][4], tops[k]
-        # overburden at the layer top from the layers above
+        t = bs.LAYERS[k][4]
         above = sum(gammas[m] * bs.LAYERS[m][4] for m in range(k + 1, len(props)))
-        g = gammas[k]
-        # sigma_v(z) = above + g (zt - z); integral over [zb, zt] / M
-        u += (above * (zt - zb) + g * (zt - zb) ** 2 / 2.0) / M
-    assert abs(tops[-1] - z_top) < 1e-9
+        u += (above * t + gammas[k] * t ** 2 / 2.0) / M
     return -u
 
 
-def run_py(system_args, material="elastic", refine=1, dyn_steps=50):
+def run_py(system_args, material="elastic", refine=1, dyn_steps=50, record_base=False):
     bs.build(ops, refine, material)
     node = top_center_node(refine)
-    out = bs.analysis(ops, system_args, ("Newton",), material, dyn_steps=dyn_steps)
+    base_v = []
+    if record_base:
+        orig = ops.analyze
+
+        def analyze(*a):
+            r = orig(*a)
+            base_v.append(ops.nodeVel(bs.base_master(refine), 1))
+            return r
+        ops_analyze, ops.analyze = ops.analyze, analyze
+    try:
+        out = bs.analysis(ops, system_args, ("Newton",), material, motion=MOTION,
+                          dyn_steps=dyn_steps)
+    finally:
+        if record_base:
+            ops.analyze = ops_analyze
     disp = ops.nodeDisp(node)
     neq = ops.systemSize()
     ops.wipe()
-    return out, disp, neq
+    return out, disp, neq, base_v
 
 
 def run_tcl(exe, system_line, material="elastic", refine=1, dyn_steps=50):
     node = top_center_node(refine)
     script = (bs.tcl(refine, material)
-              + bs.tcl_analysis(system_line, "Newton", material, dyn_steps)
+              + bs.tcl_analysis(system_line, "Newton", material, motion=MOTION,
+                                dyn_steps=dyn_steps)
               + f'puts "DISP [nodeDisp {node}]"\n')
     with tempfile.NamedTemporaryFile("w", suffix=".tcl", delete=False) as f:
         f.write(script)
@@ -115,36 +129,48 @@ def run_tcl(exe, system_line, material="elastic", refine=1, dyn_steps=50):
 
 
 def main() -> int:
+    global MOTION
     ap = argparse.ArgumentParser()
     ap.add_argument("--tcl-exe", default=None)
+    ap.add_argument("--motion", default=None, help="velocity record (m/s), one value per line")
+    ap.add_argument("--motion-dt", type=float, default=0.005)
     args = ap.parse_args()
+    if args.motion:
+        MOTION = bs.Motion.from_file(args.motion, args.motion_dt)
+    m = MOTION or bs.Motion.sweep()
+    vmax = max(abs(v) for v in m.values)
+    print(f"motion: {m.name}, dt={m.dt}, {len(m.values)} points, peak |v| {vmax:.3f} m/s, "
+          f"window starts at t={m.strong_start():.3f} s; c={bs.dashpot_coefficient():.4g} kN s/m")
     ok_all = True
 
     # 1. gravity settlement (elastic), gravity phase only
+    probe = Probe()
     bs.build(ops, 1, "elastic")
     node = top_center_node(1)
-    probe = Probe()
     out = bs.analysis(ops, ("PythonSparse", {"solver": probe, "scheme": "CSR"}), ("Newton",),
-                      "elastic", dyn_steps=0)
-    uz = ops.nodeDisp(node, 3)
-    ua = analytic_settlement()
-    neq = ops.systemSize()
+                      "elastic", motion=MOTION, dyn_steps=0)
+    uz, ua, neq = ops.nodeDisp(node, 3), analytic_settlement(), ops.systemSize()
     ops.wipe()
     good = abs(uz - ua) <= 0.02 * abs(ua)
     ok_all &= good
     print(f"[1] gravity settlement: FE {uz:.6e} m, 1D analytic {ua:.6e} m "
-          f"({100 * (uz - ua) / ua:+.2f}%), neq={neq}, gravity iters={out['gravity'][1]} "
-          f"-> {'ok' if good else 'FAIL'}")
+          f"({100 * (uz - ua) / ua:+.3f}%), neq={neq}, "
+          f"iters={out['gravity_elastic'][1]} -> {'ok' if good else 'FAIL'}")
 
-    # 2. compiled vs PythonSparse (elastic, gravity + dynamic)
-    o1, d1, neq = run_py(("UmfPack",))
+    # 2. compiled vs PythonSparse (elastic, gravity + transient) and 4. base velocity
+    o1, d1, neq, vb = run_py(("UmfPack",), record_base=True)
     p2 = Probe()
-    o2, d2, _ = run_py(("PythonSparse", {"solver": p2, "scheme": "CSR"}))
+    o2, d2, _, _ = run_py(("PythonSparse", {"solver": p2, "scheme": "CSR"}))
     good = all(v[0] == 0 for v in o1.values()) and np.allclose(d1, d2, rtol=1e-8, atol=1e-12)
     ok_all &= good
     print(f"[2] UmfPack vs PythonSparse: top disp {np.array(d1)} vs {np.array(d2)}; "
-          f"dynamic iters {o1['dynamic'][1][:5]}...; asym {p2.asym:.1e} "
+          f"transient iters {o1['transient'][1][:8]}...; asym {p2.asym:.1e} "
           f"-> {'ok' if good else 'FAIL'}")
+    vb_t = np.array(vb[-len(o1["transient"][1]):]) if vb else np.array([0.0])
+    good = np.max(np.abs(vb_t)) <= bs.INPUT_FACTOR * vmax * 1.05 and np.max(np.abs(vb_t)) > 0
+    ok_all &= good
+    print(f"[4] base velocity during the window: max |v_base| {np.max(np.abs(vb_t)):.4f} m/s "
+          f"(bound factor*max|v| = {bs.INPUT_FACTOR * vmax:.4f}) -> {'ok' if good else 'FAIL'}")
 
     # 3. Tcl twin
     if args.tcl_exe:
@@ -154,15 +180,15 @@ def main() -> int:
         print(f"[3] Tcl OpenSees.exe: top disp {np.array(d3)} ({len(results)} phases) "
               f"-> {'ok' if good else 'FAIL'}" + ("" if good else "\n" + tail))
 
-    # 4. PIMY variant
-    p4 = Probe()
-    o4, d4, neq = run_py(("PythonSparse", {"solver": p4, "scheme": "CSR"}), material="pimy",
-                         dyn_steps=20)
-    phases = {k: (v[0], sum(v[1]), max(v[1]) if v[1] else 0) for k, v in o4.items()}
-    good = all(v[0] == 0 for v in phases.values())
+    # 5. PIMY variant
+    p5 = Probe()
+    o5, d5, neq, _ = run_py(("PythonSparse", {"solver": p5, "scheme": "CSR"}), material="pimy",
+                            dyn_steps=20)
+    phases = {k: (v[0], sum(v[1]), max(v[1]) if v[1] else 0) for k, v in o5.items()}
+    good = all(v[0] == 0 for v in phases.values()) and "transient" in phases
     ok_all &= good
-    print(f"[4] PIMY: phases (ok, total iters, max iters/step) {phases}; "
-          f"factorizations {p4.factorizations}; asym {p4.asym:.1e}; top disp {np.array(d4)} "
+    print(f"[5] PIMY: phases (ok, total iters, max iters/step) {phases}; "
+          f"factorizations {p5.factorizations}; asym {p5.asym:.1e}; top disp {np.array(d5)} "
           f"-> {'ok' if good else 'FAIL'}")
     return 0 if ok_all else 1
 

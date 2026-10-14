@@ -1,26 +1,33 @@
 """Soil-column site-response model for PythonSparse benchmarks (OpenSeesPy + Tcl).
 
-Port of Femora's SiteResponse Example 3
-(https://github.com/GeotechUW/Femora/tree/main/examples/SiteResponse/Example3):
+Geometry and elastic layers: Femora's SiteResponse Example 3
+(https://github.com/GeotechUW/Femora/tree/main/examples/SiteResponse/Example3),
 a 10 m x 10 m x 18 m column of five layers on stdBrick elements with body
-forces, frequency Rayleigh damping (3% at 2.76 and 13.84 Hz), laminar side
-boundaries (equalDOF of the perimeter nodes at each height), fixed base, a
-transient gravity stage (30 steps of dt = 1, Newmark gamma = 0.6) and uniform
-base excitation in x at dt = 0.001.
+forces and laminar side boundaries (perimeter nodes at each height share
+dofs 1-3).
 
-Differences from the Femora script, all deliberate:
+Base and input: the compliant-base method of McGann and Arduino's total-stress
+site response example
+(https://opensees.berkeley.edu/wiki/index.php/Site_Response_Analysis_of_a_Layered_Soil_Column_(Total_Stress_Analysis)),
+the same as in OSU_SSI_Bridge (soil/BuildShinLysmer.tcl):
 
-* the input motion is a short synthetic sine sweep (Femora ships its
-  FrequencySweep record inside the package); benchmarks run a short window, so
-  the motion only has to excite the column;
-* ``refine`` divides dx, dy and every layer's dz to scale the model;
-* ``material='pimy'`` turns the profile into clay with
-  PressureIndependMultiYield (total stress, undrained), using the suggested
-  values on the OpenSees wiki
-  (https://opensees.berkeley.edu/wiki/index.php/PressureIndependMultiYield_Material):
-  stiff clay for the three dense layers, medium clay for the loose layer, soft
-  clay at the top. Gravity is elastic (material stage 0), then the plastic
-  stage (stage 1) is switched on, as the wiki prescribes.
+* base nodes fixed vertically only and tied horizontally (equalDOF 1 2);
+* Lysmer-Kuhlemeyer dashpots in x and y between the base and a fixed node,
+  c = rho_rock * Vs_rock * A_base (rock: Vs = 760 m/s, rho = 2.4 t/m^3, as in
+  both sources);
+* the motion enters as a horizontal force F(t) = factor * c * v(t) at the base
+  (Joyner and Chen 1975) from a velocity record. ``factor`` = 2 follows
+  OSU_SSI_Bridge (outcrop motion = twice the incident wave); the wiki example
+  uses 1.
+
+Analysis (as in the wiki example): gravity as a transient analysis with very
+large steps (dt = 500 s), first elastic (10 steps), then, for ``pimy``, the
+plastic stage (40 steps); then the transient with Newmark gamma = 0.5,
+beta = 0.25 and Rayleigh damping (Femora's 3% at 2.76 and 13.84 Hz).
+
+``material='pimy'`` uses PressureIndependMultiYield with the clay values
+suggested on the OpenSees wiki (stiff / medium / soft clay, bottom to top).
+``refine`` divides dx, dy and every layer's dz to scale the model.
 
 Both builders create nodes and elements in the same order, so equation
 numbering (RCM) and the assembled matrices match between OpenSeesPy and Tcl.
@@ -29,16 +36,20 @@ numbering (RCM) and the assembled matrices match between OpenSeesPy and Tcl.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 XMIN, XMAX, YMIN, YMAX, ZMIN = -5.0, 5.0, -5.0, 5.0, -18.0
 DX = DY = 1.0
-# name, G (Pa), unit weight (kN/m^3), nu, thickness (m), dz (m) -- bottom to top
+# name, G (Pa), unit weight (kN/m^3), nu, thickness (m), dz (m) -- bottom to top.
+# Geometry and elastic properties from the Femora site-response example 3
+# (dense Ottawa x3, loose Ottawa, dense Monterey sand); the "pimy" variant keeps
+# the geometry and replaces each layer with a wiki clay (PIMY_PROFILE).
 LAYERS = [
-    ("Dense Ottawa1", 145.0e6, 19.9, 0.3, 2.6, 1.3),
-    ("Dense Ottawa2", 145.0e6, 19.9, 0.3, 2.4, 1.2),
-    ("Dense Ottawa3", 145.0e6, 19.9, 0.3, 5.0, 1.0),
-    ("Loose Ottawa", 75.0e6, 19.1, 0.3, 6.0, 0.5),
-    ("Dense Montrey", 42.0e6, 19.8, 0.3, 2.0, 0.5),
+    ("Layer 1", 145.0e6, 19.9, 0.3, 2.6, 1.3),
+    ("Layer 2", 145.0e6, 19.9, 0.3, 2.4, 1.2),
+    ("Layer 3", 145.0e6, 19.9, 0.3, 5.0, 1.0),
+    ("Layer 4", 75.0e6, 19.1, 0.3, 6.0, 0.5),
+    ("Layer 5", 42.0e6, 19.8, 0.3, 2.0, 0.5),
 ]
 # PressureIndependMultiYield suggested values (OpenSees wiki):
 # rho (t/m^3), refShearModul (kPa), refBulkModul (kPa), cohesion (kPa), peakShearStra
@@ -48,24 +59,27 @@ PIMY_CLAYS = {
     "stiff": (1.8, 1.5e5, 7.5e5, 75.0, 0.1),
 }
 PIMY_PROFILE = ["stiff", "stiff", "stiff", "medium", "soft"]  # bottom to top
-# frictionAng, refPress, pressDependCoe: now required by OpenSees. phi = d = 0 as in
-# the wiki table; p'r = 80 kPa is the pressure at which the table gives gamma_max.
-PIMY_PHI, PIMY_REF_PRESS, PIMY_D = 0.0, 80.0, 0.0
-PIMY_YIELD_SURFACES = 20  # wiki default; also required now
+# frictionAng, refPress, pressDependCoe, noYieldSurf: now required by OpenSees.
+# phi = d = 0 as in the wiki table; p'r = 80 kPa is where the table gives gamma_max.
+PIMY_PHI, PIMY_REF_PRESS, PIMY_D, PIMY_YIELD_SURFACES = 0.0, 80.0, 0.0, 20
+
+ROCK_VS, ROCK_RHO = 760.0, 2.4          # m/s, t/m^3
+INPUT_FACTOR = 2.0                      # F = INPUT_FACTOR * c * v (OSU convention)
 
 DAMP_XI, DAMP_F1, DAMP_F2 = 0.03, 2.76, 13.84
-NEWMARK_GAMMA = 0.6
-NEWMARK_BETA = (NEWMARK_GAMMA + 0.5) ** 2 / 4.0
-GRAVITY_STEPS, GRAVITY_DT = 30, 1.0
+NEWMARK_GAMMA, NEWMARK_BETA = 0.5, 0.25
+GRAVITY_DT = 500.0
+GRAVITY_ELASTIC_STEPS, GRAVITY_PLASTIC_STEPS = 10, 40
+GRAVITY_TEST = ("NormDispIncr", 1e-5, 30)
 DYN_DT = 0.001
+DYN_TEST = ("NormDispIncr", 1e-6, 30)
+
+GHOST_NODE = 9_000_001
+DASHPOT_MAT, DASHPOT_ELE_X, DASHPOT_ELE_Y = 900, 9_000_001, 9_000_002
 
 
 def layer_props(material: str = "elastic"):
-    """(E kPa, nu, rho t/m^3, G kPa) per layer.
-
-    ``elastic``: as in the Femora script. ``pimy``: wiki clay values (E and nu
-    from G and B, for reference only; PIMY takes G and B directly).
-    """
+    """(E kPa, nu, rho t/m^3, G kPa) per layer."""
     out = []
     if material == "pimy":
         for kind in PIMY_PROFILE:
@@ -80,9 +94,11 @@ def layer_props(material: str = "elastic"):
     return out
 
 
-def grid(refine: int = 1):
-    nx = int(round((XMAX - XMIN) / DX)) * refine
-    ny = int(round((YMAX - YMIN) / DY)) * refine
+def grid(refine: int = 1, plan: int | None = None):
+    """Node coordinates. ``plan`` overrides the number of elements per side in
+    plan (laminar sides make the response independent of it)."""
+    nx = plan if plan else int(round((XMAX - XMIN) / DX)) * refine
+    ny = plan if plan else int(round((YMAX - YMIN) / DY)) * refine
     xs = [XMIN + (XMAX - XMIN) * i / nx for i in range(nx + 1)]
     ys = [YMIN + (YMAX - YMIN) * j / ny for j in range(ny + 1)]
     zs = [ZMIN]
@@ -97,9 +113,19 @@ def grid(refine: int = 1):
     return xs, ys, zs, layer_of_cell
 
 
-def _commands(refine: int, material: str):
+def base_master(refine: int = 1) -> int:
+    """Base node carrying the dashpots and the input force (corner node 1)."""
+    return 1
+
+
+def dashpot_coefficient() -> float:
+    """c = rho_rock * Vs_rock * A_base (kN s/m)."""
+    return ROCK_RHO * ROCK_VS * (XMAX - XMIN) * (YMAX - YMIN)
+
+
+def _commands(refine: int, material: str, plan: int | None = None):
     """Yield (command, args) in build order; shared by both builders."""
-    xs, ys, zs, layer_of_cell = grid(refine)
+    xs, ys, zs, layer_of_cell = grid(refine, plan)
     nx, ny, nz = len(xs) - 1, len(ys) - 1, len(zs) - 1
     props = layer_props(material)
 
@@ -132,25 +158,38 @@ def _commands(refine: int, material: str):
                      nid(i, j + 1, k + 1)]
                 yield "element", ("stdBrick", ele, *n, mat, 0.0, 0.0, -9.81 * rho)
                 ele += 1
+    # Base: fixed vertically, tied horizontally to the master base node.
+    master = base_master(refine)
     for j in range(ny + 1):
         for i in range(nx + 1):
-            yield "fix", (nid(i, j, 0), 1, 1, 1)
-    # laminar boundary: perimeter nodes at each height share dofs 1-3
+            n = nid(i, j, 0)
+            yield "fix", (n, 0, 0, 1)
+            if n != master:
+                yield "equalDOF", (master, n, 1, 2)
+    # Laminar sides: perimeter nodes at each height share dofs 1-3.
     for k in range(1, nz + 1):
         perim = [nid(i, j, k) for j in range(ny + 1) for i in range(nx + 1)
                  if i in (0, nx) or j in (0, ny)]
         for slave in perim[1:]:
             yield "equalDOF", (perim[0], slave, 1, 2, 3)
+    # Lysmer-Kuhlemeyer dashpots (x and y) from a fixed node to the base.
+    yield "node", (GHOST_NODE, xs[0], ys[0], zs[0])
+    yield "fix", (GHOST_NODE, 1, 1, 1)
+    yield "uniaxialMaterial", ("Viscous", DASHPOT_MAT, dashpot_coefficient(), 1.0)
+    yield "element", ("zeroLength", DASHPOT_ELE_X, GHOST_NODE, master,
+                      "-mat", DASHPOT_MAT, "-dir", 1)
+    yield "element", ("zeroLength", DASHPOT_ELE_Y, GHOST_NODE, master,
+                      "-mat", DASHPOT_MAT, "-dir", 2)
     w1, w2 = 2 * math.pi * DAMP_F1, 2 * math.pi * DAMP_F2
     alpha_m = 2 * DAMP_XI * w1 * w2 / (w1 + w2)
     beta_k = 2 * DAMP_XI / (w1 + w2)
     yield "rayleigh", (alpha_m, beta_k, 0.0, 0.0)
 
 
-def build(ops, refine: int = 1, material: str = "elastic") -> None:
+def build(ops, refine: int = 1, material: str = "elastic", plan: int | None = None) -> None:
     """Build the column in OpenSeesPy."""
     ops.wipe()
-    for cmd, args in _commands(refine, material):
+    for cmd, args in _commands(refine, material, plan):
         getattr(ops, cmd)(*args)
 
 
@@ -163,97 +202,149 @@ def tcl(refine: int = 1, material: str = "elastic") -> str:
     return "\n".join(lines) + "\n"
 
 
-def sweep_values(duration: float, dt: float = DYN_DT, f0=3.0, f1=10.0, amp=0.3):
-    """Linear sine sweep (in g) from f0 to f1 Hz over ``duration``.
+# ---------------------------------------------------------------------------
+# Input motion
+# ---------------------------------------------------------------------------
 
-    No ramp: the record starts at zero acceleration (sin 0), so there is no jump,
-    and short benchmark windows see full-amplitude shaking. f0 is near the
-    column's fundamental frequency (about 3.7 Hz for the elastic profile).
+
+class Motion:
+    """Velocity record (m/s) sampled at ``dt``."""
+
+    def __init__(self, values, dt, name):
+        self.values = list(values)
+        self.dt = float(dt)
+        self.name = name
+
+    @classmethod
+    def from_file(cls, path, dt):
+        """One value per line or whitespace-separated (wiki velocityHistory.out: dt 0.005)."""
+        vals = [float(v) for v in Path(path).read_text().split()]
+        return cls(vals, dt, Path(path).name)
+
+    @classmethod
+    def sweep(cls, duration=10.0, dt=0.005, f0=1.0, f1=10.0, peak_velocity=0.3):
+        """Synthetic sine-sweep velocity (fallback when no record is given)."""
+        n = int(round(duration / dt)) + 1
+        vals = [peak_velocity * math.sin(2 * math.pi * (f0 + (f1 - f0) * (i * dt) / duration / 2)
+                                         * (i * dt)) for i in range(n)]
+        return cls(vals, dt, f"sweep {f0}-{f1} Hz")
+
+    def strong_start(self) -> float:
+        """Record time of the velocity zero crossing just before the peak |v|."""
+        k = max(range(len(self.values)), key=lambda i: abs(self.values[i]))
+        while k > 0 and self.values[k - 1] * self.values[k] > 0:
+            k -= 1
+        return k * self.dt
+
+
+def add_input(ops, motion=None):
+    """Base force pattern F = INPUT_FACTOR * c * v(t) on the base master node.
+
+    Defining it before gravity is harmless: gravity steps are at t >= GRAVITY_DT,
+    past the end of the record, where the Path series is zero. Call it before
+    ``ops.partition()`` under MPI, then pass ``input_defined=True`` to analysis.
     """
-    n = int(round(duration / dt)) + 1
-    vals = []
-    for i in range(n):
-        t = i * dt
-        f = f0 + (f1 - f0) * t / max(duration, dt)
-        vals.append(amp * math.sin(2 * math.pi * f * t))
-    return vals
+    motion = motion or Motion.sweep()
+    assert GRAVITY_DT > (len(motion.values) - 1) * motion.dt
+    ops.timeSeries("Path", 2, "-dt", motion.dt, "-values", *motion.values,
+                   "-factor", INPUT_FACTOR * dashpot_coefficient())
+    ops.pattern("Plain", 2, 2)
+    ops.load(base_master(), 1.0, 0.0, 0.0)
 
 
-def _material_tags():
-    return list(range(1, len(LAYERS) + 1))
+def analysis(ops, system_args, algorithm, material="elastic", motion=None, dyn_steps=50,
+             start_time=None, gravity_algorithm=None, dyn_dt=DYN_DT, on_step=None,
+             constraints=("Transformation",), numberer=("RCM",), input_defined=False):
+    """Elastic gravity, plastic gravity (pimy), then ``dyn_steps`` of shaking.
 
-
-def analysis(ops, system_args, algorithm, material="elastic", dyn_steps=50,
-             plastic_gravity_steps=10):
-    """Gravity stage then ``dyn_steps`` of base excitation.
-
-    Returns a dict with ok, iterations per step and seconds for each phase.
+    The transient window starts at record time ``start_time`` (default: the
+    zero crossing of velocity before the peak, so the base force does not
+    jump). Returns {phase: (ok, iterations per step, seconds)}.
     """
     import time
 
-    def setup():
-        ops.constraints("Transformation")
-        ops.numberer("RCM")
+    motion = motion or Motion.sweep()
+    start_time = motion.strong_start() if start_time is None else start_time
+
+    def setup(test, alg):
+        ops.wipeAnalysis()
+        ops.constraints(*constraints)
+        ops.numberer(*numberer)
         ops.system(*system_args)
-        ops.test("NormDispIncr", 1e-6, 50)
-        ops.algorithm(*algorithm)
+        ops.test(*test)
+        ops.algorithm(*alg)
         ops.integrator("Newmark", NEWMARK_GAMMA, NEWMARK_BETA)
         ops.analysis("Transient")
 
-    def run(steps, dt):
+    def run(steps, dt, callback=None):
         iters, ok = [], 0
         t0 = time.perf_counter()
         for _ in range(steps):
             ok = ops.analyze(1, dt)
             iters.append(ops.testIter())
+            if callback is not None:
+                callback()
             if ok != 0:
                 break
         return ok, iters, time.perf_counter() - t0
 
     out = {}
-    setup()
+    setup(GRAVITY_TEST, gravity_algorithm or algorithm)
     if material == "pimy":
-        for tag in _material_tags():
+        for tag in range(1, len(LAYERS) + 1):
             ops.updateMaterialStage("-material", tag, "-stage", 0)
-    out["gravity"] = run(GRAVITY_STEPS, GRAVITY_DT)
-    if material == "pimy" and out["gravity"][0] == 0:
-        for tag in _material_tags():
+    out["gravity_elastic"] = run(GRAVITY_ELASTIC_STEPS, GRAVITY_DT)
+    if material == "pimy" and out["gravity_elastic"][0] == 0:
+        for tag in range(1, len(LAYERS) + 1):
             ops.updateMaterialStage("-material", tag, "-stage", 1)
-        out["gravity_plastic"] = run(plastic_gravity_steps, GRAVITY_DT)
-    if all(v[0] == 0 for v in out.values()):
-        ops.setTime(0.0)
-        vals = sweep_values(dyn_steps * DYN_DT + DYN_DT)
-        ops.timeSeries("Path", 2, "-dt", DYN_DT, "-values", *vals, "-factor", 9.81)
-        ops.pattern("UniformExcitation", 2, 1, "-accel", 2)
-        out["dynamic"] = run(dyn_steps, DYN_DT)
+        out["gravity_plastic"] = run(GRAVITY_PLASTIC_STEPS, GRAVITY_DT)
+    if any(v[0] != 0 for v in out.values()) or dyn_steps <= 0:
+        return out
+    ops.setTime(start_time)
+    if not input_defined:
+        add_input(ops, motion)
+    setup(DYN_TEST, algorithm)
+    out["transient"] = run(dyn_steps, dyn_dt, on_step)
     return out
 
 
-def tcl_analysis(system_line, algorithm, material="elastic", dyn_steps=50,
-                 plastic_gravity_steps=10):
+def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
+                 start_time=None):
     """Tcl twin of :func:`analysis`; prints one RESULT line per phase."""
-    vals = " ".join(repr(v) for v in sweep_values(dyn_steps * DYN_DT + DYN_DT))
+    motion = motion or Motion.sweep()
+    start_time = motion.strong_start() if start_time is None else start_time
+    vals = " ".join(repr(v) for v in motion.values)
+
+    def setup(test):
+        return "\n".join(["wipeAnalysis", "constraints Transformation", "numberer RCM",
+                          system_line, "test " + " ".join(map(str, test)),
+                          f"algorithm {algorithm}",
+                          f"integrator Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}",
+                          "analysis Transient"])
+
+    def run(name, steps, dt):
+        return "\n".join([
+            "set iters {}", "set ok 0", "set t0 [clock microseconds]",
+            f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
+            f"  set ok [analyze 1 {dt}]", "  lappend iters [testIter]",
+            "  if {$ok != 0} break", "}",
+            f'puts "RESULT {name} ok=$ok seconds=[expr ([clock microseconds] - $t0) * 1e-6] '
+            'neq=[systemSize] iters=$iters"',
+            "if {$ok != 0} {exit}",
+        ])
+
     stage = lambda s: "\n".join(  # noqa: E731
-        f"updateMaterialStage -material {t} -stage {s}" for t in _material_tags())
-    run = lambda name, steps, dt: "\n".join([  # noqa: E731
-        "set iters {}", "set ok 0", "set t0 [clock microseconds]",
-        f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
-        f"  set ok [analyze 1 {dt}]", "  lappend iters [testIter]",
-        "  if {$ok != 0} break", "}",
-        f'puts "RESULT {name} ok=$ok seconds=[expr ([clock microseconds] - $t0) * 1e-6] '
-        'neq=[systemSize] iters=$iters"',
-        "if {$ok != 0} {exit}",
-    ])
-    lines = ["constraints Transformation", "numberer RCM", system_line,
-             "test NormDispIncr 1e-6 50", f"algorithm {algorithm}",
-             f"integrator Newmark {NEWMARK_GAMMA} {NEWMARK_BETA!r}", "analysis Transient"]
+        f"updateMaterialStage -material {t} -stage {s}" for t in range(1, len(LAYERS) + 1))
+    lines = [setup(GRAVITY_TEST)]
     if material == "pimy":
         lines.append(stage(0))
-    lines.append(run("gravity", GRAVITY_STEPS, GRAVITY_DT))
+    lines.append(run("gravity_elastic", GRAVITY_ELASTIC_STEPS, GRAVITY_DT))
     if material == "pimy":
-        lines += [stage(1), run("gravity_plastic", plastic_gravity_steps, GRAVITY_DT)]
-    lines += ["setTime 0.0",
-              f"timeSeries Path 2 -dt {DYN_DT} -values {{{vals}}} -factor 9.81",
-              "pattern UniformExcitation 2 1 -accel 2",
-              run("dynamic", dyn_steps, DYN_DT)]
+        lines += [stage(1), run("gravity_plastic", GRAVITY_PLASTIC_STEPS, GRAVITY_DT)]
+    if dyn_steps > 0:
+        lines += [f"setTime {start_time!r}",
+                  f"timeSeries Path 2 -dt {motion.dt!r} -values {{{vals}}} "
+                  f"-factor {INPUT_FACTOR * dashpot_coefficient()!r}",
+                  f"pattern Plain 2 2 {{ load {base_master()} 1.0 0.0 0.0 }}",
+                  setup(DYN_TEST), run("transient", dyn_steps, DYN_DT)]
     return "\n".join(lines) + "\n"
