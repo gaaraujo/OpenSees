@@ -131,6 +131,8 @@ def main() -> int:
     ap.add_argument("--resolve", type=int, default=5)
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--skip", nargs="*", default=None)
+    ap.add_argument("--min-n", type=int, default=0)
+    ap.add_argument("--max-n", type=int, default=10**9)
     ap.add_argument("--max-call-seconds", type=float, default=120.0,
                     help="stop a solver's sequence after a call slower than this")
     args = ap.parse_args()
@@ -140,6 +142,8 @@ def main() -> int:
     rng = np.random.default_rng(0)
     for path in args.matrices:
         A = sp.load_npz(path).tocsr()
+        if not args.min_n <= A.shape[0] < args.max_n:
+            continue
         A.sum_duplicates()
         A.sort_indices()
         bpath = str(path).replace("_A.npz", "_b.npy")
