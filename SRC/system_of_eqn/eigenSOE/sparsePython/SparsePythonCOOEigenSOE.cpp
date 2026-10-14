@@ -154,11 +154,12 @@ SparsePythonCOOEigenSOE::addA(const Matrix &m, const ID &id, double fact)
                 continue;
             }
 
-            for (int k = start; k < end; ++k) {
-                if (colIndices[static_cast<std::size_t>(k)] == col) {
-                    kValues[static_cast<std::size_t>(k)] += fact * m(i, j);
-                    break;
-                }
+            // Columns within a row are sorted, so use binary search.
+            auto rowBegin = colIndices.begin() + start;
+            auto rowEnd = colIndices.begin() + end;
+            auto it = std::lower_bound(rowBegin, rowEnd, col);
+            if (it != rowEnd && *it == col) {
+                kValues[static_cast<std::size_t>(it - colIndices.begin())] += fact * m(i, j);
             }
         }
     }
@@ -200,11 +201,12 @@ SparsePythonCOOEigenSOE::addM(const Matrix &m, const ID &id, double fact)
                 continue;
             }
 
-            for (int k = start; k < end; ++k) {
-                if (colIndices[static_cast<std::size_t>(k)] == col) {
-                    mValues[static_cast<std::size_t>(k)] += fact * m(i, j);
-                    break;
-                }
+            // Columns within a row are sorted, so use binary search.
+            auto rowBegin = colIndices.begin() + start;
+            auto rowEnd = colIndices.begin() + end;
+            auto it = std::lower_bound(rowBegin, rowEnd, col);
+            if (it != rowEnd && *it == col) {
+                mValues[static_cast<std::size_t>(it - colIndices.begin())] += fact * m(i, j);
             }
         }
     }
@@ -217,18 +219,14 @@ void
 SparsePythonCOOEigenSOE::zeroA(void)
 {
     std::fill(kValues.begin(), kValues.end(), 0.0);
-    if (matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-        matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
-    }
+    updateMatrixStatus();
 }
 
 void
 SparsePythonCOOEigenSOE::zeroM(void)
 {
     std::fill(mValues.begin(), mValues.end(), 0.0);
-    if (matrixStatus == MatrixStatus::STRUCTURE_CHANGED) {
-        matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
-    }
+    updateMatrixStatus();
 }
 
 int
