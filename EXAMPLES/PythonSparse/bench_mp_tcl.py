@@ -40,6 +40,8 @@ SYSTEMS = {
     "Tcl MP DistributedCuDSS spd": "system DistributedCuDSS -matrixType spd",
     "Tcl MP DistributedCuDSS dFFI": "system DistributedCuDSS -precision dFFI",
     "Tcl MP Mumps": "system Mumps",
+    "Tcl MP DistributedAmgX AMG":
+        "system DistributedAmgX -solver PCG -preconditioner AMG -maxIters 2000 -relTolerance 1e-8",
 }
 
 

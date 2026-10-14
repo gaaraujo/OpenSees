@@ -282,7 +282,13 @@ TCL_CONFIGS = {"compiled CuDSS (Tcl)": "system CuDSS",
                "compiled CuDSS dFFI (Tcl)": "system CuDSS -precision dFFI",
                "compiled CuDSS spd dFFI (Tcl)": "system CuDSS -matrixType spd -precision dFFI",
                "compiled CuDSS spd dFFI ir2 (Tcl)":
-                   "system CuDSS -matrixType spd -precision dFFI -irNSteps 2"}
+                   "system CuDSS -matrixType spd -precision dFFI -irNSteps 2",
+               # AmgX through CudaBcsrLinSOE (builds with AMGX_NO_MPI_DIR only)
+               "compiled AmgX PCG-AMG (Tcl)":
+                   "system AmgX -solver PCG -preconditioner AMG -maxIters 2000 -relTolerance 1e-8",
+               "compiled AmgX PCG-JacobiL1 (Tcl)":
+                   "system AmgX -solver PCG -preconditioner JACOBI_L1 -maxIters 2000 "
+                   "-relTolerance 1e-8"}
 
 
 # ---------------------------------------------------------------------------
