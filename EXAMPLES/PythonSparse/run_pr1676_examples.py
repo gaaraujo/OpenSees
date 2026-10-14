@@ -16,10 +16,8 @@ Usage::
 
     OPENSEESPY_PATH=<dir with opensees module> python run_pr1676_examples.py
 
-Note: the eigen script's run_benchmark() performs a ``system Diagonal`` static
-step before calling eigen. In that state genBandArpack returns wrong
-eigenvalues (OpenSeesPy 3.8.0 as well), so the reference here is computed on a
-freshly built model instead.
+The eigen reference is computed on a freshly built model, independently of
+the script's own analysis setup.
 """
 
 from __future__ import annotations
@@ -126,7 +124,7 @@ def package_eigen_solvers() -> list[tuple[str, object]]:
 def linear_checks(results: list) -> None:
     bench = load("benchmark_python_sparse")
     solvers = [("BandSPD", bench.setup_bandspd, "RCM"), ("UmfPack", bench.setup_umfpack, "Plain"),
-               ("CuPyCG [PR, cp.sparse bug]", bench.setup_cupy_cg, "RCM")]
+               ("CuPyCG", bench.setup_cupy_cg, "RCM")]
     ops = bench.ops
     for name, factory in package_linear_solvers():
         def setup(factory=factory):
@@ -159,7 +157,7 @@ def linear_checks(results: list) -> None:
 def eigen_checks(results: list) -> None:
     bench = load("benchmark_python_sparse_eigen")
     ops = bench.ops
-    solvers = [("genBandArpack [PR flow]", bench.run_gen_band_arpack),
+    solvers = [("genBandArpack", bench.run_gen_band_arpack),
                ("SciPyEigsh", bench.run_scipy_eigsh)]
     for name, factory in package_eigen_solvers():
         def run(num_modes, factory=factory):
@@ -191,8 +189,7 @@ def main() -> int:
     print(f"module={getattr(mod, '__file__', '?')}")
     for name, outcome in results:
         print(f"  {name:38s} {outcome}")
-    expected = ("[PR, cp.sparse bug]", "[PR flow]")
-    return 0 if all(o.startswith("ok") or n.endswith(expected) for n, o in results) else 1
+    return 0 if all(o.startswith("ok") for _, o in results) else 1
 
 
 if __name__ == "__main__":

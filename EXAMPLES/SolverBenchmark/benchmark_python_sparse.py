@@ -43,6 +43,7 @@ else:
 
 # Import CuPy for GPU solvers
 import cupy as cp
+import cupyx.scipy.sparse
 import cupyx.scipy.sparse.linalg
 
 
@@ -82,7 +83,7 @@ class CuPyCGSolver:
             values_gpu = cp.asarray(vals)
             indices_gpu = cp.asarray(idx)
             index_ptr_gpu = cp.asarray(indptr)
-            self.A = cp.sparse.csr_matrix((values_gpu, indices_gpu, index_ptr_gpu), shape=(num_eqn, num_eqn))
+            self.A = cupyx.scipy.sparse.csr_matrix((values_gpu, indices_gpu, index_ptr_gpu), shape=(num_eqn, num_eqn))
         elif matrix_status == 'COEFFICIENTS_CHANGED':
             # Update the values of the CSR matrix on the GPU
             values_gpu = cp.asarray(vals)
@@ -96,7 +97,7 @@ class CuPyCGSolver:
         rhs_gpu = cp.asarray(rhs_buf)
         
         # Solve using conjugate gradient (without preconditioning) on the GPU
-        x_gpu, info = cupyx.scipy.sparse.linalg.cg(self.A, rhs_gpu, tol=self.rtol, atol=self.atol, maxiter=self.maxiter)
+        x_gpu, info = cupyx.scipy.sparse.linalg.cg(self.A, rhs_gpu, rtol=self.rtol, atol=self.atol, maxiter=self.maxiter)
         
         # Copy result back to CPU buffer
         x_buf = np.frombuffer(x, dtype=np.float64, count=num_eqn)
