@@ -18,7 +18,7 @@ solver time into Python overhead, value/RHS transfer, factorization and solve.
 Usage::
 
     python bench_conventional.py --out results.jsonl [--sizes 2k 12k 54k]
-        [--models plastic sliding] [--repeat 3] [--tcl-exe path/to/OpenSees.exe]
+        [--models plastic] [--repeat 3] [--tcl-exe path/to/OpenSees.exe]
 
 Set OPENSEESPY_PATH to use a locally built opensees module.
 """
@@ -298,7 +298,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--sizes", nargs="+", default=["2k", "12k", "54k"])
-    ap.add_argument("--models", nargs="+", default=["plastic", "sliding"])
+    ap.add_argument("--models", nargs="+", default=["plastic"])
     ap.add_argument("--algorithms", nargs="+", default=list(ALGORITHMS))
     ap.add_argument("--repeat", type=int, default=3)
     ap.add_argument("--tcl-exe", default=None)
@@ -321,7 +321,7 @@ def main() -> int:
 
     for model in args.models:
         symmetric = model == "plastic"
-        algs = args.algorithms if model == "plastic" else ["Newton"]
+        algs = args.algorithms
         for size in args.sizes:
             for alg_name in algs:
                 cfgs = configurations(symmetric)
