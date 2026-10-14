@@ -80,9 +80,15 @@ private:
     double *workArea;
     int sizeWork;
 
+    /** myB holds myBsize entries plus one header slot, so solve() sends the RHS and
+     *  the worker's triplet count in one message (myVectBHeader views all of it). */
     double *myB;
     Vector *myVectB;
+    Vector *myVectBHeader;
     int myBsize;
+
+    /** The inner SOE stores the lower triangle only (SYMMETRIC_LOWER). */
+    bool lowerOnly = false;
 
     /** Worker: assembled sparse contributions keyed by (row,col). */
     std::unordered_map<uint64_t, double> tripletMap;

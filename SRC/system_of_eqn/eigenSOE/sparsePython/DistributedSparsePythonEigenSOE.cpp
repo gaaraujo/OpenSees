@@ -264,7 +264,8 @@ DistributedSparsePythonEigenSOE::sendTripletMap(Channel *theChannel,
 
 int
 DistributedSparsePythonEigenSOE::recvAndMergeTripletMap(Channel *theChannel,
-                                                        std::vector<double> &values)
+                                                        std::vector<double> *values,
+                                                        bool merge)
 {
     ID nTripID(1);
     theChannel->recvID(0, 0, nTripID);
@@ -280,7 +281,9 @@ DistributedSparsePythonEigenSOE::recvAndMergeTripletMap(Channel *theChannel,
     theChannel->recvID(0, 0, rows);
     theChannel->recvID(0, 0, cols);
     theChannel->recvVector(0, 0, vals);
-    return mergeTripletsInto(values, &rows(0), &cols(0), &vals(0), nTrip);
+    if (!merge || values == nullptr)
+        return 0;
+    return mergeTripletsInto(*values, &rows(0), &cols(0), &vals(0), nTrip);
 }
 
 int
@@ -402,6 +405,12 @@ DistributedSparsePythonEigenSOE::solve(int numModes, bool generalized, bool find
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
 
+        // Header: -1 if K and M are unchanged on this rank, 1 if their triplets
+        // follow. Rank 0 reads it instead of its own status, so the triplet
+        // messages cannot go unmatched.
+        ID header(1);
+        header(0) = sendMats ? 1 : -1;
+        theChannel->sendID(0, 0, header);
         if (sendMats) {
             sendTripletMap(theChannel, kTripletMap);
             sendTripletMap(theChannel, mTripletMap);
@@ -432,7 +441,17 @@ DistributedSparsePythonEigenSOE::solve(int numModes, bool generalized, bool find
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
-        if (sendMats) {
+        ID header(1);
+        theChannel->recvID(0, 0, header);
+        const bool workerSendsMats = header(0) > 0;
+        if (workerSendsMats != sendMats) {
+            // Fail on every rank instead of solving a partial K or M; the
+            // worker's triplets are still received below.
+            opserr << "WARNING DistributedSparsePythonEigenSOE::solve() - matrix status of rank "
+                   << j + 1 << " differs from rank 0\n";
+            result(0) = -1;
+        }
+        if (workerSendsMats) {
             std::vector<double> *kVals = nullptr;
             std::vector<double> *mVals = nullptr;
             if (auto *c = dynamic_cast<SparsePythonCompressedEigenSOE *>(thePythonSOE)) {
@@ -442,13 +461,12 @@ DistributedSparsePythonEigenSOE::solve(int numModes, bool generalized, bool find
                 kVals = &c->getKValues();
                 mVals = &c->getMValues();
             }
-            if (kVals == nullptr || mVals == nullptr) {
+            if (kVals == nullptr || mVals == nullptr)
                 result(0) = -1;
-                continue;
-            }
-            if (recvAndMergeTripletMap(theChannel, *kVals) < 0)
+            const bool merge = result(0) == 0;
+            if (recvAndMergeTripletMap(theChannel, kVals, merge) < 0)
                 result(0) = -1;
-            if (recvAndMergeTripletMap(theChannel, *mVals) < 0)
+            if (recvAndMergeTripletMap(theChannel, mVals, merge) < 0)
                 result(0) = -1;
         }
     }

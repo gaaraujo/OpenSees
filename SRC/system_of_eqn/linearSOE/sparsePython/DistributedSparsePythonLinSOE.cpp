@@ -37,7 +37,7 @@ DistributedSparsePythonLinSOE::DistributedSparsePythonLinSOE(LinearSOE *theSOE)
       thePythonSOE(theSOE),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0)
+      myB(0), myVectB(0), myVectBHeader(0), myBsize(0)
 {
     if (thePythonSOE == nullptr) {
         opserr << "FATAL DistributedSparsePythonLinSOE - null SparsePython LinSOE\n";
@@ -49,7 +49,7 @@ DistributedSparsePythonLinSOE::DistributedSparsePythonLinSOE()
       thePythonSOE(0),
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
-      myB(0), myVectB(0), myBsize(0)
+      myB(0), myVectB(0), myVectBHeader(0), myBsize(0)
 {
 }
 
@@ -66,6 +66,9 @@ DistributedSparsePythonLinSOE::~DistributedSparsePythonLinSOE()
 
     if (myVectB != 0)
         delete myVectB;
+
+    if (myVectBHeader != 0)
+        delete myVectBHeader;
 
     delete thePythonSOE;
 }
@@ -108,11 +111,15 @@ DistributedSparsePythonLinSOE::ensureMyBSize(int size)
         delete[] myB;
     if (myVectB != 0)
         delete myVectB;
+    if (myVectBHeader != 0)
+        delete myVectBHeader;
 
-    myB = new double[size];
+    // One extra slot: the header that solve() appends to the RHS message.
+    myB = new double[size + 1];
     myVectB = new Vector(myB, size);
+    myVectBHeader = new Vector(myB, size + 1);
     myBsize = size;
-    for (int i = 0; i < size; ++i)
+    for (int i = 0; i <= size; ++i)
         myB[i] = 0.0;
 }
 
@@ -138,6 +145,10 @@ int
 DistributedSparsePythonLinSOE::accumulateTriplet(int row, int col, double value)
 {
     if (row < 0 || col < 0 || row >= myBsize || col >= myBsize)
+        return 0;
+
+    // With SYMMETRIC_LOWER storage rank 0 holds row >= col only.
+    if (lowerOnly && col > row)
         return 0;
 
     tripletMap[packRC(row, col)] += value;
@@ -313,6 +324,12 @@ DistributedSparsePythonLinSOE::setSize(Graph &theGraph)
 
     clearTriplets();
     mergeIndexMap.clear();
+
+    lowerOnly = false;
+    if (auto *c = dynamic_cast<SparsePythonCompressedLinSOE *>(thePythonSOE))
+        lowerOnly = c->getMatrixType() == SparsePythonMatrixType::SYMMETRIC_LOWER;
+    else if (auto *c = dynamic_cast<SparsePythonCOOLinSOE *>(thePythonSOE))
+        lowerOnly = c->getMatrixType() == SparsePythonMatrixType::SYMMETRIC_LOWER;
 
     int result = 0;
 
@@ -535,14 +552,14 @@ DistributedSparsePythonLinSOE::solve(void)
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        theChannel->sendVector(0, 0, *myVectB);
+        const int nTrip = sendA ? static_cast<int>(tripletMap.size()) : 0;
+        // Header after the RHS: -1 if the matrix is unchanged on this rank, else the
+        // number of triplets that follow. Rank 0 reads it instead of its own status,
+        // so the triplet messages cannot go unmatched.
+        myB[myBsize] = sendA ? static_cast<double>(nTrip) : -1.0;
+        theChannel->sendVector(0, 0, *myVectBHeader);
 
         if (sendA) {
-            const int nTrip = static_cast<int>(tripletMap.size());
-            ID nTripID(1);
-            nTripID(0) = nTrip;
-            theChannel->sendID(0, 0, nTripID);
-
             if (nTrip > 0) {
                 ID rows(nTrip);
                 ID cols(nTrip);
@@ -574,34 +591,37 @@ DistributedSparsePythonLinSOE::solve(void)
     vectB = *myVectB;
     result(0) = 0;
 
-    ensureWorkArea(myBsize);
-    Vector remoteB(myBsize);
+    ensureWorkArea(myBsize + 1);
+    Vector remoteBHeader(workArea, myBsize + 1);
+    Vector remoteB(workArea, myBsize);
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
-        theChannel->recvVector(0, 0, remoteB);
+        theChannel->recvVector(0, 0, remoteBHeader);
         vectB += remoteB;
 
-        if (sendA) {
-            ID nTripID(1);
-            theChannel->recvID(0, 0, nTripID);
-            const int nTrip = nTripID(0);
-            if (nTrip < 0) {
-                opserr << "WARNING DistributedSparsePythonLinSOE::solve() - invalid nTrip\n";
+        const double header = workArea[myBsize];
+        const bool workerSendsA = header >= 0.0;
+        const int nTrip = workerSendsA ? static_cast<int>(header) : 0;
+
+        if (workerSendsA != sendA) {
+            // A rank skipped (or repeated) its assembly: fail on every rank instead
+            // of merging a partial matrix. The triplets are still received below.
+            opserr << "WARNING DistributedSparsePythonLinSOE::solve() - matrix status of rank "
+                   << j + 1 << " differs from rank 0\n";
+            result(0) = -1;
+        }
+
+        if (nTrip > 0) {
+            ID rows(nTrip);
+            ID cols(nTrip);
+            Vector vals(nTrip);
+            theChannel->recvID(0, 0, rows);
+            theChannel->recvID(0, 0, cols);
+            theChannel->recvVector(0, 0, vals);
+            if (result(0) == 0 &&
+                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
                 result(0) = -1;
-                continue;
-            }
-            if (nTrip > 0) {
-                ID rows(nTrip);
-                ID cols(nTrip);
-                Vector vals(nTrip);
-                theChannel->recvID(0, 0, rows);
-                theChannel->recvID(0, 0, cols);
-                theChannel->recvVector(0, 0, vals);
-                if (result(0) == 0 &&
-                    mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
-                    result(0) = -1;
-                }
             }
         }
     }
