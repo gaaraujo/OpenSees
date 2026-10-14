@@ -71,6 +71,10 @@ ALGORITHMS = {
 ITER_RTOL = 1e-8   # relative residual of the iterative linear solvers (--iter-rtol)
 ITER_MAXITER = 2000
 
+
+def _noop(*_a):
+    """Iteration callback: makes the package count linear iterations."""
+
 SIZES = {"6k": (1, 10), "27k": (1, 20), "54k": (2, 20), "126k": (2, 30), "189k": (3, 30),
          "457k": (4, 40)}
 
@@ -230,22 +234,22 @@ def configurations():
 
             for pname, M in (("jacobi", cprec.jacobi), ("ilu0", cprec.ilu)):
                 cfgs[f"pkg cupy cg {pname}"] = (lambda M=M: ("PythonSparse", ocp.cg(
-                    rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, record_stats=True).to_openseespy()))
+                    rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, callback=_noop, record_stats=True).to_openseespy()))
             # ILU is not a symmetric preconditioner: pair it with GMRES
             cfgs["pkg cupy gmres ilu0"] = lambda: ("PythonSparse", ocp.gmres(
-                rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=cprec.ilu,
+                rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=cprec.ilu, callback=_noop,
                 record_stats=True).to_openseespy())
             cfgs["pkg cupy cg jacobi float32"] = lambda: ("PythonSparse", ocp.cg(
-                rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=cprec.jacobi, dtype=np.float32,
+                rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=cprec.jacobi, dtype=np.float32, callback=_noop,
                 record_stats=True).to_openseespy())
         from openseespy_solvers import scipy as osc
         from openseespy_solvers.scipy import precond as sprec
 
         for pname, M in (("jacobi", sprec.jacobi), ("ilu", sprec.ilu)):
             cfgs[f"pkg scipy cg {pname}"] = (lambda M=M: ("PythonSparse", osc.cg(
-                rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, record_stats=True).to_openseespy()))
+                rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, callback=_noop, record_stats=True).to_openseespy()))
         cfgs["pkg scipy gmres ilu"] = lambda: ("PythonSparse", osc.gmres(
-            rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=sprec.ilu,
+            rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=sprec.ilu, callback=_noop,
             record_stats=True).to_openseespy())
         cfgs["pkg hybrid(umfpack)"] = lambda: ("PythonSparse", hybrid(
             umfpack(), rtol=ITER_RTOL, maxiter=ITER_MAXITER, record_stats=True).to_openseespy())
