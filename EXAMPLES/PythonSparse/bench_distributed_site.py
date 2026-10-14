@@ -26,6 +26,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import time
 import warnings
 from pathlib import Path
@@ -97,12 +98,16 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--single", nargs=4, metavar=("MATERIAL", "SIZE", "ALGORITHM", "CONFIG"),
                     help=argparse.SUPPRESS)
+    ap.add_argument("--result-file", default=None, help=argparse.SUPPRESS)
     args = ap.parse_args()
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
 
     if args.single:
         rec = run_single(*args.single, motion, args.steps)
         if ops.getPID() == 0:
+            # stdout of several ranks can interleave within a line; the file cannot
+            if args.result_file:
+                Path(args.result_file).write_text(json.dumps(rec) + "\n")
             print("JSON " + json.dumps(rec), flush=True)
         return 0
 
@@ -130,21 +135,25 @@ def main() -> int:
                         key = (material, nproc, alg, name)
                         if key in skipped:
                             continue
+                        fd, result_file = tempfile.mkstemp(prefix="bench_dps_", suffix=".json")
+                        os.close(fd)
                         cmd = [args.mpiexec, "-n", str(nproc), sys.executable,
                                str(Path(__file__).resolve()), "--motion", args.motion,
                                "--motion-dt", str(args.motion_dt), "--steps", str(args.steps),
+                               "--result-file", result_file,
                                "--single", material, size, alg, name]
                         t0 = time.perf_counter()
                         try:
                             res = subprocess.run(cmd, capture_output=True, text=True,
                                                  timeout=args.max_seconds)
-                            line = [ln for ln in res.stdout.splitlines()
-                                    if ln.startswith("JSON ")]
-                            rec = (json.loads(line[-1][5:]) if line else
+                            text = Path(result_file).read_text().strip()
+                            rec = (json.loads(text) if text else
                                    {"ok": -999, "error": (res.stdout + res.stderr)[-600:]})
                         except subprocess.TimeoutExpired:
                             rec = {"ok": -997, "error": f"timeout after {args.max_seconds} s"}
                             skipped.add(key)
+                        finally:
+                            os.unlink(result_file)
                         rec.update({"material": material, "size": size, "np": nproc,
                                     "algorithm": alg, "config": name,
                                     "wall_seconds": time.perf_counter() - t0})

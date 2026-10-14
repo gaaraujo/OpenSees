@@ -357,10 +357,11 @@ def tcl_input(motion=None) -> str:
 
 def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
                  start_time=None, dyn_dt=DYN_DT, numberer="RCM", input_defined=False,
-                 rank0_only=False, constraints="Transformation"):
+                 rank0_only=False, constraints="Transformation", result_file=None):
     """Tcl twin of :func:`analysis`; prints one RESULT line per phase:
     ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``
-    (only from rank 0 with ``rank0_only``, for OpenSeesMP)."""
+    (only from rank 0 with ``rank0_only``, for OpenSeesMP). With ``result_file`` the
+    lines are also appended to that file, which other ranks' output cannot interleave."""
     motion = motion or Motion.sweep()
     start_time = motion.strong_start() if start_time is None else start_time
     guard = "if {[getPID] == 0} " if rank0_only else "if {1} "
@@ -373,6 +374,10 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
                           "analysis Transient"])
 
     def run(name, steps, dt):
+        line = (f'"RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
+                'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"')
+        to_file = (f"; set fh [open {{{result_file}}} a]; puts $fh {line}; close $fh"
+                   if result_file else "")
         return "\n".join([
             "set iters {}", "set times {}", "set ok 0", "set total 0",
             f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
@@ -382,8 +387,7 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
             "  set total [expr $total + $dt_us]",
             "  lappend times [expr $dt_us * 1e-6]", "  lappend iters [testIter]",
             "  if {$ok != 0} break", "}",
-            guard + f'{{puts "RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
-            'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"}',
+            guard + f"{{puts {line}{to_file}}}",
             "if {$ok != 0} {exit}",
         ])
 

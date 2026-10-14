@@ -45,12 +45,15 @@ SYSTEMS = {
 }
 
 
+RESULT_FILE = "result.txt"   # rank 0 writes its RESULT lines here (in the run directory)
+
+
 def script(material, size, alg, system_line, motion, steps):
     refine, plan = SIZES[size]
     return (bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
             + bs.tcl_analysis(system_line, ALGORITHMS[alg], material, motion=motion,
                               dyn_steps=steps, numberer="ParallelRCM", input_defined=True,
-                              rank0_only=True))
+                              rank0_only=True, result_file=RESULT_FILE))
 
 
 def parse(text):
@@ -59,7 +62,7 @@ def parse(text):
         if not line.startswith("RESULT"):
             continue
         parts = line.split()
-        fields = dict(item.split("=", 1) for item in parts[2:])
+        fields = dict(item.split("=", 1) for item in parts[2:] if "=" in item)
         neq = int(fields["neq"])
         phases[parts[1]] = {"ok": int(fields["ok"]),
                             "iters": [int(v) for v in fields.get("iters", "").split(",") if v],
@@ -116,7 +119,12 @@ def main() -> int:
                                                   path], capture_output=True, text=True,
                                                  timeout=args.max_seconds, env=env,
                                                  cwd=workdir)
-                            phases, neq = parse(res.stdout + res.stderr)
+                            rf = os.path.join(workdir, RESULT_FILE)
+                            try:
+                                phases, neq = parse(open(rf).read() if os.path.exists(rf) else "")
+                            except (KeyError, ValueError) as exc:
+                                phases, neq = {}, -1
+                                res.stderr += f"\nRESULT parse failed: {exc}"
                             ok = (0 if phases and all(p["ok"] == 0 for p in phases.values())
                                   and "transient" in phases else -1)
                             rec = {"ok": ok, "neq": neq, "phases": phases}
