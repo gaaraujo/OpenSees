@@ -52,7 +52,7 @@ def node_id(nx, ny, i, j, k):
     return 1 + i + (nx + 1) * (j + (ny + 1) * k)
 
 
-def run(material, motion, plan, duration, dt=0.001, hyst_cells=()):
+def run(material, motion, plan, duration, dt=0.001, hyst_cells=(), start_time=0.0):
     """Full-record run; returns time, top/base absolute accel, profile, hysteresis."""
     bs.build(ops, 1, material, plan=plan)
     xs, ys, zs, cells = bs.grid(1, plan)
@@ -74,7 +74,7 @@ def run(material, motion, plan, duration, dt=0.001, hyst_cells=()):
             rec["hyst"][name].append((g[5], s[5]))
 
     out = bs.analysis(ops, ("UmfPack",), ("Newton",), material, motion=motion,
-                      dyn_steps=int(round(duration / dt)), start_time=0.0, dyn_dt=dt,
+                      dyn_steps=int(round(duration / dt)), start_time=start_time, dyn_dt=dt,
                       on_step=on_step)
     ops.wipe()
     ok = {k: v[0] for k, v in out.items()}
@@ -203,7 +203,7 @@ def plan_check(path, coarse, fine):
     ax.plot(fine["t"], fine["a_top"] / 9.81, color=ORANGE, lw=1.0, ls="--",
             label="10×10 plan (benchmark mesh)")
     err = np.max(np.abs(coarse["a_top"][:n] - fine["a_top"])) / np.max(np.abs(fine["a_top"]))
-    ax.set_title(f"Top acceleration, elastic column: plan mesh does not change the response "
+    ax.set_title(f"Elastic column, top acceleration: 1×1 vs 10×10 plan "
                  f"(max difference {100 * err:.2g}% of peak)", loc="left", fontsize=9, color=INK)
     ax.set_xlabel("time (s)")
     ax.set_ylabel("absolute accel. (g)")
