@@ -231,6 +231,10 @@ def configurations():
             for pname, M in (("jacobi", cprec.jacobi), ("ilu0", cprec.ilu)):
                 cfgs[f"pkg cupy cg {pname}"] = (lambda M=M: ("PythonSparse", ocp.cg(
                     rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, record_stats=True).to_openseespy()))
+            # ILU is not a symmetric preconditioner: pair it with GMRES
+            cfgs["pkg cupy gmres ilu0"] = lambda: ("PythonSparse", ocp.gmres(
+                rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=cprec.ilu,
+                record_stats=True).to_openseespy())
             cfgs["pkg cupy cg jacobi float32"] = lambda: ("PythonSparse", ocp.cg(
                 rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=cprec.jacobi, dtype=np.float32,
                 record_stats=True).to_openseespy())
@@ -240,6 +244,9 @@ def configurations():
         for pname, M in (("jacobi", sprec.jacobi), ("ilu", sprec.ilu)):
             cfgs[f"pkg scipy cg {pname}"] = (lambda M=M: ("PythonSparse", osc.cg(
                 rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, record_stats=True).to_openseespy()))
+        cfgs["pkg scipy gmres ilu"] = lambda: ("PythonSparse", osc.gmres(
+            rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=sprec.ilu,
+            record_stats=True).to_openseespy())
         cfgs["pkg hybrid(umfpack)"] = lambda: ("PythonSparse", hybrid(
             umfpack(), rtol=ITER_RTOL, maxiter=ITER_MAXITER, record_stats=True).to_openseespy())
     except ImportError:
