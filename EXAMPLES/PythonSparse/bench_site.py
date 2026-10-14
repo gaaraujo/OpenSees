@@ -69,7 +69,7 @@ INPUT_FACTOR = 2.0                      # F = INPUT_FACTOR * c * v (OSU conventi
 DAMP_XI, DAMP_F1, DAMP_F2 = 0.03, 2.76, 13.84
 NEWMARK_GAMMA, NEWMARK_BETA = 0.5, 0.25
 GRAVITY_DT = 500.0
-GRAVITY_ELASTIC_STEPS, GRAVITY_PLASTIC_STEPS = 10, 40
+GRAVITY_ELASTIC_STEPS, GRAVITY_PLASTIC_STEPS = 10, 10  # plastic stage converges in 1 iter/step
 GRAVITY_TEST = ("NormDispIncr", 1e-5, 30)
 DYN_DT = 0.001
 DYN_TEST = ("NormDispIncr", 1e-6, 30)
@@ -193,10 +193,10 @@ def build(ops, refine: int = 1, material: str = "elastic", plan: int | None = No
         getattr(ops, cmd)(*args)
 
 
-def tcl(refine: int = 1, material: str = "elastic") -> str:
+def tcl(refine: int = 1, material: str = "elastic", plan: int | None = None) -> str:
     """Tcl script building the same column."""
     lines = ["wipe"]
-    for cmd, args in _commands(refine, material):
+    for cmd, args in _commands(refine, material, plan):
         lines.append(cmd + " " + " ".join(repr(a) if isinstance(a, float) else str(a)
                                           for a in args))
     return "\n".join(lines) + "\n"
@@ -254,12 +254,15 @@ def add_input(ops, motion=None):
 
 def analysis(ops, system_args, algorithm, material="elastic", motion=None, dyn_steps=50,
              start_time=None, gravity_algorithm=None, dyn_dt=DYN_DT, on_step=None,
-             constraints=("Transformation",), numberer=("RCM",), input_defined=False):
+             constraints=("Transformation",), numberer=("RCM",), input_defined=False,
+             step_probe=None):
     """Elastic gravity, plastic gravity (pimy), then ``dyn_steps`` of shaking.
 
     The transient window starts at record time ``start_time`` (default: the
     zero crossing of velocity before the peak, so the base force does not
-    jump). Returns {phase: (ok, iterations per step, seconds)}.
+    jump). Returns {phase: (ok, iterations per step, seconds, seconds per step)}.
+    ``step_probe(phase)`` is called after every step of every phase (outside
+    the timed region); ``on_step()`` after every transient step.
     """
     import time
 
@@ -276,41 +279,45 @@ def analysis(ops, system_args, algorithm, material="elastic", motion=None, dyn_s
         ops.integrator("Newmark", NEWMARK_GAMMA, NEWMARK_BETA)
         ops.analysis("Transient")
 
-    def run(steps, dt, callback=None):
-        iters, ok = [], 0
-        t0 = time.perf_counter()
+    def run(phase, steps, dt, callback=None):
+        iters, step_seconds, ok = [], [], 0
         for _ in range(steps):
+            t = time.perf_counter()
             ok = ops.analyze(1, dt)
+            step_seconds.append(time.perf_counter() - t)
             iters.append(ops.testIter())
+            if step_probe is not None:
+                step_probe(phase)
             if callback is not None:
                 callback()
             if ok != 0:
                 break
-        return ok, iters, time.perf_counter() - t0
+        return ok, iters, sum(step_seconds), step_seconds
 
     out = {}
     setup(GRAVITY_TEST, gravity_algorithm or algorithm)
     if material == "pimy":
         for tag in range(1, len(LAYERS) + 1):
             ops.updateMaterialStage("-material", tag, "-stage", 0)
-    out["gravity_elastic"] = run(GRAVITY_ELASTIC_STEPS, GRAVITY_DT)
+    out["gravity_elastic"] = run("gravity_elastic", GRAVITY_ELASTIC_STEPS, GRAVITY_DT)
     if material == "pimy" and out["gravity_elastic"][0] == 0:
         for tag in range(1, len(LAYERS) + 1):
             ops.updateMaterialStage("-material", tag, "-stage", 1)
-        out["gravity_plastic"] = run(GRAVITY_PLASTIC_STEPS, GRAVITY_DT)
+        out["gravity_plastic"] = run("gravity_plastic", GRAVITY_PLASTIC_STEPS, GRAVITY_DT)
     if any(v[0] != 0 for v in out.values()) or dyn_steps <= 0:
         return out
     ops.setTime(start_time)
     if not input_defined:
         add_input(ops, motion)
     setup(DYN_TEST, algorithm)
-    out["transient"] = run(dyn_steps, dyn_dt, on_step)
+    out["transient"] = run("transient", dyn_steps, dyn_dt, on_step)
     return out
 
 
 def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
-                 start_time=None):
-    """Tcl twin of :func:`analysis`; prints one RESULT line per phase."""
+                 start_time=None, dyn_dt=DYN_DT):
+    """Tcl twin of :func:`analysis`; prints one RESULT line per phase:
+    ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``."""
     motion = motion or Motion.sweep()
     start_time = motion.strong_start() if start_time is None else start_time
     vals = " ".join(repr(v) for v in motion.values)
@@ -324,12 +331,16 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
 
     def run(name, steps, dt):
         return "\n".join([
-            "set iters {}", "set ok 0", "set t0 [clock microseconds]",
+            "set iters {}", "set times {}", "set ok 0", "set total 0",
             f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
-            f"  set ok [analyze 1 {dt}]", "  lappend iters [testIter]",
+            "  set t [clock microseconds]",
+            f"  set ok [analyze 1 {dt}]",
+            "  set dt_us [expr [clock microseconds] - $t]",
+            "  set total [expr $total + $dt_us]",
+            "  lappend times [expr $dt_us * 1e-6]", "  lappend iters [testIter]",
             "  if {$ok != 0} break", "}",
-            f'puts "RESULT {name} ok=$ok seconds=[expr ([clock microseconds] - $t0) * 1e-6] '
-            'neq=[systemSize] iters=$iters"',
+            f'puts "RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
+            'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"',
             "if {$ok != 0} {exit}",
         ])
 
@@ -346,5 +357,5 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
                   f"timeSeries Path 2 -dt {motion.dt!r} -values {{{vals}}} "
                   f"-factor {INPUT_FACTOR * dashpot_coefficient()!r}",
                   f"pattern Plain 2 2 {{ load {base_master()} 1.0 0.0 0.0 }}",
-                  setup(DYN_TEST), run("transient", dyn_steps, DYN_DT)]
+                  setup(DYN_TEST), run("transient", dyn_steps, dyn_dt)]
     return "\n".join(lines) + "\n"
