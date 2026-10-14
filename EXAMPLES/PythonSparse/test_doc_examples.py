@@ -279,7 +279,13 @@ def main() -> int:
 
     # eigen: compare with the default solver
     brick_model()
-    ops.numberer("RCM")
+    if DISTRIBUTED and NP > 1:
+        # A partitioned model needs the parallel numberer and a parallel system.
+        ops.constraints("Plain")
+        ops.numberer("ParallelRCM")
+        ops.system("Mumps")
+    else:
+        ops.numberer("RCM")
     ref_eig = ops.eigen(6)
     try:
         lam = ops.eigen(SYSTEM if DISTRIBUTED else "PythonSparse", 6,
