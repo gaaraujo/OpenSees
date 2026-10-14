@@ -341,7 +341,7 @@ def tcl_input(motion=None) -> str:
 
 def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
                  start_time=None, dyn_dt=DYN_DT, numberer="RCM", input_defined=False,
-                 rank0_only=False):
+                 rank0_only=False, constraints="Transformation"):
     """Tcl twin of :func:`analysis`; prints one RESULT line per phase:
     ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``
     (only from rank 0 with ``rank0_only``, for OpenSeesMP)."""
@@ -350,7 +350,7 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
     guard = "if {[getPID] == 0} " if rank0_only else "if {1} "
 
     def setup(test):
-        return "\n".join(["wipeAnalysis", "constraints Transformation", f"numberer {numberer}",
+        return "\n".join(["wipeAnalysis", f"constraints {constraints}", f"numberer {numberer}",
                           system_line, "test " + " ".join(map(str, test)),
                           f"algorithm {algorithm}",
                           f"integrator Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}",

@@ -393,6 +393,16 @@ def is_inexact(config):
     return any(s in config for s in ("cg", "gmres", "hybrid", "float32", "AmgX", "pyamg"))
 
 
+# Constraint handler for the equalDOF ties (--constraints), e.g. "Penalty 1e12 1e12".
+# Penalty keeps the retained dofs in the system and adds stiff coupling terms.
+CONSTRAINTS = "Transformation"
+
+
+def _constraints_args():
+    head, *rest = CONSTRAINTS.split()
+    return (head, *(float(v) for v in rest))
+
+
 def run_python(material, size, alg_name, config, motion, steps):
     refine, plan = SIZES[size]
     make = configurations()[config]
@@ -410,7 +420,8 @@ def run_python(material, size, alg_name, config, motion, steps):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             out = bs.analysis(ops, args, ALGORITHMS[alg_name], material, motion=motion,
-                              dyn_steps=steps, step_probe=timers.probe)
+                              dyn_steps=steps, step_probe=timers.probe,
+                              constraints=_constraints_args())
     except Exception as exc:  # noqa: BLE001  (e.g. system not in this build)
         ops.wipe()
         return {"ok": -998, "error": f"{type(exc).__name__}: {exc}"}
@@ -430,7 +441,8 @@ def run_python(material, size, alg_name, config, motion, steps):
 def run_tcl(exe, material, size, alg_name, system_line, motion, steps, timeout):
     refine, plan = SIZES[size]
     script = bs.tcl(refine, material, plan) + bs.tcl_analysis(
-        system_line, " ".join(ALGORITHMS[alg_name]), material, motion=motion, dyn_steps=steps)
+        system_line, " ".join(ALGORITHMS[alg_name]), material, motion=motion, dyn_steps=steps,
+        constraints=CONSTRAINTS)
     with tempfile.NamedTemporaryFile("w", suffix=".tcl", delete=False) as f:
         f.write(script)
         path = f.name
@@ -474,7 +486,7 @@ def summary(rec):
 
 
 def main() -> int:
-    global ITER_RTOL
+    global ITER_RTOL, CONSTRAINTS
     ap = argparse.ArgumentParser()
     ap.add_argument("--motion", required=True, help="velocity record (m/s)")
     ap.add_argument("--motion-dt", type=float, default=0.005)
@@ -491,12 +503,15 @@ def main() -> int:
                     help="hard timeout per run; a config that times out skips larger sizes")
     ap.add_argument("--iter-rtol", type=float, default=ITER_RTOL,
                     help="relative residual tolerance of the iterative linear solvers")
+    ap.add_argument("--constraints", default="Transformation",
+                    help='constraint handler, e.g. "Penalty 1e12 1e12"')
     ap.add_argument("--list", action="store_true", help="print the configurations and exit")
     ap.add_argument("--single", nargs=4, metavar=("MATERIAL", "SIZE", "ALGORITHM", "CONFIG"),
                     help=argparse.SUPPRESS)
     args = ap.parse_args()
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
     ITER_RTOL = args.iter_rtol
+    CONSTRAINTS = args.constraints
 
     if args.single:
         material, size, alg, config = args.single
@@ -543,6 +558,7 @@ def main() -> int:
                         cmd = [sys.executable, str(Path(__file__).resolve()), "--motion",
                                args.motion, "--motion-dt", str(args.motion_dt), "--steps",
                                str(args.steps), "--iter-rtol", str(args.iter_rtol),
+                               "--constraints", CONSTRAINTS,
                                "--single", material, size, alg, name]
                         env = None
                         if name in SINGLE_THREAD_CONFIGS and not os.environ.get("BENCH_KEEP_THREADS"):
@@ -559,7 +575,8 @@ def main() -> int:
                     if rec["ok"] == -997:
                         skipped.add(key)
                     rec.update({"material": material, "size": size, "algorithm": alg,
-                                "config": name, "wall_seconds": time.perf_counter() - t0,
+                                "config": name, "constraints": CONSTRAINTS,
+                                "wall_seconds": time.perf_counter() - t0,
                                 "iter_rtol": args.iter_rtol if is_inexact(name) else None})
                     out.write(json.dumps(rec) + "\n")
                     out.flush()
