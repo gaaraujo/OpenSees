@@ -1,5 +1,6 @@
 #include "SparsePythonFactory.h"
 
+#include "DistributedSparsePythonLinSOE.h"
 #include "SparsePythonCOOLinSOE.h"
 #include "SparsePythonCOOLinSolver.h"
 #include "SparsePythonCompressedLinSOE.h"
@@ -22,7 +23,14 @@ namespace {
 bool
 IsSparsePythonType(const char *type)
 {
-    return strcmp(type, "PythonSparse") == 0;
+    return strcmp(type, "PythonSparse") == 0 ||
+           strcmp(type, "DistributedPythonSparse") == 0;
+}
+
+bool
+IsDistributedSparsePythonType(const char *type)
+{
+    return strcmp(type, "DistributedPythonSparse") == 0;
 }
 
 std::string
@@ -68,7 +76,7 @@ ParseSingleWritableFlag(const char *token, SparsePythonWritableFlags &flags, boo
     // Trim whitespace
     normalized.erase(0, normalized.find_first_not_of(" \t"));
     normalized.erase(normalized.find_last_not_of(" \t") + 1);
-    
+
     if (normalized == "values" || normalized == "value" || normalized == "data") {
         flags.values = true;
         return true;
@@ -86,7 +94,7 @@ ParseSingleWritableFlag(const char *token, SparsePythonWritableFlags &flags, boo
         hasNone = true;
         return true;
     }
-    
+
     return false;
 }
 
@@ -97,35 +105,35 @@ ParseWritableFlags(const char *token, SparsePythonWritableFlags &flags)
         return false;
     }
     std::string normalized = ToLower(token);
-    
+
     flags = SparsePythonWritableFlags(false, false);
     bool hasAll = false;
     bool hasNone = false;
-    
+
     // Parse comma-separated list
     std::istringstream iss(normalized);
     std::string item;
     bool valid = false;
-    
+
     while (std::getline(iss, item, ',')) {
         if (item.empty()) {
             // Skip empty items from multiple commas
             continue;
         }
-        
+
         if (!ParseSingleWritableFlag(item.c_str(), flags, hasAll, hasNone)) {
             // Unknown token
             return false;
         }
-        
+
         valid = true;
-        
+
         // Early exit for complete flags
         if (hasAll || hasNone) {
             break;
         }
     }
-    
+
     return valid;
 }
 
@@ -175,19 +183,19 @@ WarnUnknownKeys(PyObject *dict, const char *type)
 }
 
 PyObject *
-EnsureCallable(PyObject *solverObject, const char *solveMethod)
+EnsureCallable(PyObject *solverObject, const char *solveMethod, const char *typeName)
 {
     // Ensure GIL is held for Python API calls
     PyGILState_STATE gilState = PyGILState_Ensure();
 
     if (!PyObject_HasAttrString(solverObject, solveMethod)) {
-        opserr << "WARNING: system PythonSparse - solver object missing method '" << solveMethod << "'" << endln;
+        opserr << "WARNING: system " << typeName << " - solver object missing method '" << solveMethod << "'" << endln;
         PyGILState_Release(gilState);
         return nullptr;
     }
     PyObject *callable = PyObject_GetAttrString(solverObject, solveMethod);
     if (callable == nullptr || !PyCallable_Check(callable)) {
-        opserr << "WARNING: system PythonSparse - attribute '" << solveMethod << "' not callable" << endln;
+        opserr << "WARNING: system " << typeName << " - attribute '" << solveMethod << "' not callable" << endln;
         Py_XDECREF(callable);
         PyGILState_Release(gilState);
         return nullptr;
@@ -200,14 +208,23 @@ void *
 CreateCompressedSOE(PyObject *solverObject, SparsePythonStorageScheme scheme,
                     const SparsePythonWritableFlags &writableFlags,
                     SparsePythonMatrixType theMatrixType,
-                    const SparsePythonCallOptions &callOptions)
+                    const SparsePythonCallOptions &callOptions,
+                    bool requireSolver, const char *typeName)
 {
     if (scheme == SparsePythonStorageScheme::COO) {
-        opserr << "WARNING: system PythonSparse - COO scheme is not compatible with compressed storage" << endln;
+        opserr << "WARNING: system " << typeName << " - COO scheme is not compatible with compressed storage" << endln;
         return nullptr;
     }
 
-    PyObject *callable = EnsureCallable(solverObject, "solve");
+    if (solverObject == nullptr) {
+        if (requireSolver) {
+            opserr << "WARNING: system " << typeName << " - dictionary must contain 'solver' key" << endln;
+            return nullptr;
+        }
+        return new SparsePythonCompressedLinSOE(scheme, theMatrixType);
+    }
+
+    PyObject *callable = EnsureCallable(solverObject, "solve", typeName);
     if (callable == nullptr) {
         return nullptr;
     }
@@ -228,9 +245,18 @@ CreateCompressedSOE(PyObject *solverObject, SparsePythonStorageScheme scheme,
 
 void *
 CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFlags,
-             SparsePythonMatrixType theMatrixType, const SparsePythonCallOptions &callOptions)
+             SparsePythonMatrixType theMatrixType, const SparsePythonCallOptions &callOptions,
+             bool requireSolver, const char *typeName)
 {
-    PyObject *callable = EnsureCallable(solverObject, "solve");
+    if (solverObject == nullptr) {
+        if (requireSolver) {
+            opserr << "WARNING: system " << typeName << " - dictionary must contain 'solver' key" << endln;
+            return nullptr;
+        }
+        return new SparsePythonCOOLinSOE(theMatrixType);
+    }
+
+    PyObject *callable = EnsureCallable(solverObject, "solve", typeName);
     if (callable == nullptr) {
         return nullptr;
     }
@@ -254,7 +280,11 @@ CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFl
 void *
 OPS_SparsePythonSolver()
 {
-    const char *expectedSyntax = "system 'PythonSparse' {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', 'writable': 'values'|'rhs'|'values,rhs'|'all'|'none', 'matrix_type': 'GENERAL'|'SYMMETRIC_LOWER', 'typed': False|True}";
+    const char *expectedSyntax =
+        "system 'PythonSparse'|'DistributedPythonSparse' "
+        "{'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', "
+        "'writable': 'values'|'rhs'|'values,rhs'|'all'|'none', "
+        "'matrix_type': 'GENERAL'|'SYMMETRIC_LOWER', 'typed': False|True}";
 
     OPS_ResetCurrentInputArg(-1);
 
@@ -265,6 +295,8 @@ OPS_SparsePythonSolver()
         opserr << "Expected syntax: " << expectedSyntax << endln;
         return nullptr;
     }
+
+    const bool distributed = IsDistributedSparsePythonType(type);
 
     if (!Py_IsInitialized()) {
         Py_Initialize();
@@ -290,9 +322,13 @@ OPS_SparsePythonSolver()
         return nullptr;
     }
 
-    // Extract 'solver' (required)
+    // Extract 'solver' (required on serial; optional None/missing for distributed workers)
     PyObject *solverObj = PyDict_GetItemString(dict, "solver");
-    if (solverObj == nullptr) {
+    if (solverObj == Py_None) {
+        solverObj = nullptr;
+    }
+    const bool requireSolver = !distributed;
+    if (requireSolver && solverObj == nullptr) {
         opserr << "WARNING: system " << type << " - dictionary must contain 'solver' key" << endln;
         opserr << "Expected syntax: " << expectedSyntax << endln;
         PyGILState_Release(gilState);
@@ -318,15 +354,12 @@ OPS_SparsePythonSolver()
     }
 
     // Extract 'writable' (optional, defaults to read-only)
-    // Can be None, a string ('values', 'rhs', 'values,rhs', 'all', 'none'), or a list (['values', 'rhs'])
     SparsePythonWritableFlags writableFlags;  // Default: all read-only
     PyObject *writableObj = PyDict_GetItemString(dict, "writable");
     if (writableObj != nullptr) {
         if (writableObj == Py_None) {
-            // None means 'none' (all read-only), which is already the default
-            // No need to do anything, writableFlags is already false/false
+            // None means 'none' (all read-only)
         } else if (PyUnicode_Check(writableObj)) {
-            // String format: 'values,rhs', 'all', 'none', etc.
             const char *writableStr = PyUnicode_AsUTF8(writableObj);
             if (writableStr == nullptr || !ParseWritableFlags(writableStr, writableFlags)) {
                 opserr << "WARNING: system " << type << " - invalid writable flags '"
@@ -336,19 +369,18 @@ OPS_SparsePythonSolver()
                 return nullptr;
             }
         } else if (PyList_Check(writableObj) || PyTuple_Check(writableObj)) {
-            // List/tuple format: ['values', 'rhs']
             PyObject *seq = PySequence_Fast(writableObj, "writable must be a sequence");
             if (seq == nullptr) {
                 PyGILState_Release(gilState);
                 return nullptr;
             }
-            
+
             Py_ssize_t len = PySequence_Fast_GET_SIZE(seq);
             writableFlags = SparsePythonWritableFlags(false, false);
             bool valid = false;
             bool hasAll = false;
             bool hasNone = false;
-            
+
             for (Py_ssize_t i = 0; i < len; i++) {
                 PyObject *item = PySequence_Fast_GET_ITEM(seq, i);
                 if (!PyUnicode_Check(item)) {
@@ -357,14 +389,14 @@ OPS_SparsePythonSolver()
                     PyGILState_Release(gilState);
                     return nullptr;
                 }
-                
+
                 const char *itemStr = PyUnicode_AsUTF8(item);
                 if (itemStr == nullptr) {
                     Py_DECREF(seq);
                     PyGILState_Release(gilState);
                     return nullptr;
                 }
-                
+
                 if (!ParseSingleWritableFlag(itemStr, writableFlags, hasAll, hasNone)) {
                     opserr << "WARNING: system " << type << " - unknown writable flag '"
                            << itemStr << "' in list" << endln;
@@ -373,15 +405,14 @@ OPS_SparsePythonSolver()
                     PyGILState_Release(gilState);
                     return nullptr;
                 }
-                
+
                 valid = true;
-                
-                // Early exit for complete flags
+
                 if (hasAll || hasNone) {
                     break;
                 }
             }
-            
+
             Py_DECREF(seq);
             if (!valid) {
                 opserr << "WARNING: system " << type << " - 'writable' list must contain at least one valid flag" << endln;
@@ -432,12 +463,17 @@ OPS_SparsePythonSolver()
 
     void *result = nullptr;
     if (scheme == SparsePythonStorageScheme::COO) {
-        result = CreateCOOSOE(solverObj, writableFlags, theMatrixType, callOptions);
+        result = CreateCOOSOE(solverObj, writableFlags, theMatrixType, callOptions,
+                              requireSolver, type);
     } else {
-        result = CreateCompressedSOE(solverObj, scheme, writableFlags, theMatrixType, callOptions);
+        result = CreateCompressedSOE(solverObj, scheme, writableFlags, theMatrixType,
+                                     callOptions, requireSolver, type);
+    }
+
+    if (result != nullptr && distributed) {
+        result = new DistributedSparsePythonLinSOE(static_cast<LinearSOE *>(result));
     }
 
     PyGILState_Release(gilState);
     return result;
 }
-

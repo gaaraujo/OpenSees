@@ -40,6 +40,10 @@ class SparsePythonCOOEigenSOE : public EigenSOE
     int setPythonSolver(SparsePythonCOOEigenSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const { return matrixStatus; }
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side: record equation count without building a sparse pattern. */
+    int resizeVectors(int size);
 
     const std::vector<int> &getRowIndices(void) const { return rowIndices; }
     const std::vector<int> &getColIndices(void) const { return colIndices; }

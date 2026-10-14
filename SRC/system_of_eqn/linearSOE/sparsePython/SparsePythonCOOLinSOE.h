@@ -54,6 +54,10 @@ class SparsePythonCOOLinSOE : public LinearSOE
     int setPythonSolver(SparsePythonCOOLinSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const { return matrixStatus; }
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side resize: allocate X/B only (no sparse pattern). */
+    int resizeVectors(int size);
 
     const std::vector<int> &getRowIndices(void) const { return rowIndices; }
     const std::vector<int> &getColIndices(void) const { return colIndices; }

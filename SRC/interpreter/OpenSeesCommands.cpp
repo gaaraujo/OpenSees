@@ -90,6 +90,10 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <PFEMLinSOE.h>
 #include <SparsePythonFactory.h>
 #include <SparsePythonEigenFactory.h>
+#ifdef _PARALLEL_INTERPRETERS
+#include <DistributedSparsePythonLinSOE.h>
+#include <DistributedSparsePythonEigenSOE.h>
+#endif
 #include <Accelerator.h>
 #include <KrylovAccelerator.h>
 #include <AcceleratedNewton.h>
@@ -347,6 +351,21 @@ OpenSeesCommands::eigen(int typeSolver, double shift,
             } else {
 
                 theEigenSOE = new ArpackSOE(shift);
+#ifdef _PARALLEL_INTERPRETERS
+                if (theSOE != 0) {
+                    int soeTag = theSOE->getClassTag();
+                    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
+                        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
+                        soeTag == LinSOE_TAGS_DistributedSparsePythonLinSOE) {
+                        ArpackSOE *theArpackSOE = (ArpackSOE *)theEigenSOE;
+                        auto theMachineBroker = this->getMachineBroker();
+                        if (theMachineBroker != 0) {
+                            theArpackSOE->setProcessID(theMachineBroker->getPID());
+                            theArpackSOE->setChannels(this->getNumChannels(), this->getChannels());
+                        }
+                    }
+                }
+#endif
 
             }
 
@@ -1514,6 +1533,27 @@ int OPS_System()
 
         theSOE = pythonSOE;
 
+#ifdef _PARALLEL_INTERPRETERS
+    } else if (strcmp(type,"DistributedPythonSparse") == 0) {
+
+        LinearSOE *pythonSOE = static_cast<LinearSOE *>(OPS_SparsePythonSolver());
+        if (pythonSOE == nullptr) {
+            return -1;
+        }
+
+        DistributedSparsePythonLinSOE *theParallelSOE =
+            dynamic_cast<DistributedSparsePythonLinSOE *>(pythonSOE);
+        theSOE = pythonSOE;
+        if (theParallelSOE != nullptr && cmds != nullptr) {
+            auto theMachineBroker = cmds->getMachineBroker();
+            auto rank = theMachineBroker->getPID();
+            auto numChannels = cmds->getNumChannels();
+            auto theChannels = cmds->getChannels();
+            theParallelSOE->setProcessID(rank);
+            theParallelSOE->setChannels(numChannels, theChannels);
+        }
+#endif
+
     } else if ((strcmp(type,"SparseGeneral") == 0) ||
 	       (strcmp(type,"SuperLU") == 0) ||
 	       (strcmp(type,"SparseGEN") == 0)) {
@@ -2150,6 +2190,7 @@ int OPS_eigenAnalysis()
 
     // Check type of eigenvalue analysis
     bool pythonSparseEigen = false;
+    bool distributedPythonSparseEigen = false;
     EigenSOE *providedEigenSOE = 0;
 
     while (OPS_GetNumRemainingInputArgs() > 1) {
@@ -2201,8 +2242,12 @@ int OPS_eigenAnalysis()
     else if (strcmp(type,"PythonSparse") == 0) {
         pythonSparseEigen = true;
         typeSolver = EigenSOE_TAGS_SparsePythonCompressedEigenSOE;
-        // will be updated to the actual type of the eigen solver
-        // after the EigenSOE is created
+        break;
+
+    } else if (strcmp(type,"DistributedPythonSparse") == 0) {
+        pythonSparseEigen = true;
+        distributedPythonSparseEigen = true;
+        typeSolver = EigenSOE_TAGS_DistributedSparsePythonEigenSOE;
         break;
 
     } else {
@@ -2226,12 +2271,24 @@ int OPS_eigenAnalysis()
     cmds->setNumEigen(numEigen);
 
     if (pythonSparseEigen) {
+        OPS_SetSparsePythonEigenDistributed(distributedPythonSparseEigen);
         void *eigenSOEPtr = OPS_SparsePythonEigenSolver();
         if (eigenSOEPtr == 0) {
             return -1;
         }
         providedEigenSOE = static_cast<EigenSOE *>(eigenSOEPtr);
         typeSolver = providedEigenSOE->getClassTag();
+#ifdef _PARALLEL_INTERPRETERS
+        if (distributedPythonSparseEigen && cmds != nullptr) {
+            DistributedSparsePythonEigenSOE *theParallelEigen =
+                dynamic_cast<DistributedSparsePythonEigenSOE *>(providedEigenSOE);
+            if (theParallelEigen != nullptr) {
+                auto theMachineBroker = cmds->getMachineBroker();
+                theParallelEigen->setProcessID(theMachineBroker->getPID());
+                theParallelEigen->setChannels(cmds->getNumChannels(), cmds->getChannels());
+            }
+        }
+#endif
     }
 
     // set eigen soe

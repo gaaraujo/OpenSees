@@ -206,6 +206,24 @@ SparsePythonCompressedLinSOE::getMatrixStatus() const
 }
 
 int
+SparsePythonCompressedLinSOE::resizeVectors(int size)
+{
+    if (size < 0) {
+        opserr << "WARNING: SparsePythonCompressedLinSOE::resizeVectors - size < 0\n";
+        return -1;
+    }
+
+    indexPtr.clear();
+    indices.clear();
+    values.clear();
+    rhs.assign(static_cast<std::size_t>(size), 0.0);
+    sol.assign(static_cast<std::size_t>(size), 0.0);
+    updateVectorViews();
+    matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    return 0;
+}
+
+int
 SparsePythonCompressedLinSOE::addA(const Matrix &m, const ID &id, double fact)
 {
     if (fact == 0.0) {

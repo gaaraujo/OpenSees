@@ -113,6 +113,23 @@ SparsePythonCOOEigenSOE::setSize(Graph &theGraph)
     return 0;
 }
 
+int
+SparsePythonCOOEigenSOE::resizeVectors(int size)
+{
+    if (size < 0) {
+        opserr << "WARNING: SparsePythonCOOEigenSOE::resizeVectors - size < 0\n";
+        return -1;
+    }
+
+    rowOffsets.assign(static_cast<std::size_t>(size) + 1u, 0);
+    rowIndices.clear();
+    colIndices.clear();
+    kValues.clear();
+    mValues.clear();
+    matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    return 0;
+}
+
 void
 SparsePythonCOOEigenSOE::updateMatrixStatus()
 {

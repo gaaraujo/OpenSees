@@ -54,6 +54,7 @@
 #define EigenSOE_TAGS_SymmGeneralizedEigenSOE 	7
 #define EigenSOE_TAGS_SparsePythonCompressedEigenSOE 	8
 #define EigenSOE_TAGS_SparsePythonCOOEigenSOE 	9
+#define EigenSOE_TAGS_DistributedSparsePythonEigenSOE 	10
 #define EigenSOLVER_TAGS_BandArpackSolver 	1
 #define EigenSOLVER_TAGS_SymArpackSolver 	2
 #define EigenSOLVER_TAGS_SymBandEigenSolver     3
@@ -1147,6 +1148,7 @@
 #define LinSOE_TAGS_PFEMDiaLinSOE 30
 #define LinSOE_TAGS_SparsePythonCompressedLinSOE 100101
 #define LinSOE_TAGS_SparsePythonCOOLinSOE        100102
+#define LinSOE_TAGS_DistributedSparsePythonLinSOE 100103
 #define LinSOE_TAGS_PARDISOGenLinSOE 99990
 
 

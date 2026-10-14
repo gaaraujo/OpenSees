@@ -2,10 +2,14 @@
 #define SparsePythonEigenFactory_h
 
 /**
- * Parse the `eigen PythonSparse` command and construct the corresponding EigenSOE.
+ * Parse the `eigen PythonSparse` / `eigen DistributedPythonSparse` command and
+ * construct the corresponding EigenSOE.
  *
  * Expected syntax:
- *   `eigen PythonSparse numModes {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO'}`
+ *   `eigen PythonSparse|DistributedPythonSparse numModes {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO'}`
+ *
+ * Call OPS_SetSparsePythonEigenDistributed(true) before OPS_SparsePythonEigenSolver()
+ * when constructing DistributedPythonSparse so workers may omit/None the solver.
  *
  * The supplied Python object must expose a `solve` method. When invoked the
  * solver receives memoryviews pointing directly to the EigenSOE storage:
@@ -20,6 +24,7 @@
  * The returned pointer owns a Python-backed `EigenSOE` instance and should be
  * treated as an `EigenSOE*` by the caller.
  */
+void OPS_SetSparsePythonEigenDistributed(bool distributed);
 void *OPS_SparsePythonEigenSolver();
 
 #endif /* SparsePythonEigenFactory_h */
