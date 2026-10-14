@@ -202,6 +202,22 @@ def tcl(refine: int = 1, material: str = "elastic", plan: int | None = None) -> 
     return "\n".join(lines) + "\n"
 
 
+def run_stamp() -> dict:
+    """Time, host and code version for result headers (runs append, never overwrite)."""
+    import datetime
+    import socket
+    import subprocess
+
+    try:
+        commit = subprocess.run(["git", "-C", str(Path(__file__).resolve().parent), "rev-parse",
+                                 "--short", "HEAD"], capture_output=True, text=True,
+                                timeout=10).stdout.strip()
+    except Exception:  # noqa: BLE001
+        commit = "?"
+    return {"time": datetime.datetime.now().isoformat(timespec="seconds"),
+            "host": socket.gethostname(), "commit": commit or "?"}
+
+
 # ---------------------------------------------------------------------------
 # Input motion
 # ---------------------------------------------------------------------------

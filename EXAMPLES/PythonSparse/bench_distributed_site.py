@@ -114,7 +114,7 @@ def main() -> int:
         return 0
     if not args.out:
         ap.error("--out is required")
-    meta = {"platform": platform.platform(), "python": platform.python_version(),
+    meta = {**bs.run_stamp(), "platform": platform.platform(), "python": platform.python_version(),
             "opensees": getattr(ops, "__file__", "?"), "motion": motion.name,
             "start_time": motion.strong_start(), "steps": args.steps,
             "dyn_test": bs.DYN_TEST, "gravity_test": bs.GRAVITY_TEST, "dyn_dt": bs.DYN_DT,

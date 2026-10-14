@@ -151,7 +151,7 @@ def main() -> int:
                     help="stop a solver's sequence after a call slower than this")
     args = ap.parse_args()
     out = open(args.out, "a", encoding="utf-8")
-    out.write(json.dumps({"meta": {"platform": platform.platform(), "rtol": args.rtol,
+    out.write(json.dumps({"meta": {**bc.bs.run_stamp(), "platform": platform.platform(), "rtol": args.rtol,
                                    "refactor": args.refactor, "resolve": args.resolve}}) + "\n")
     rng = np.random.default_rng(0)
     for path in args.matrices:

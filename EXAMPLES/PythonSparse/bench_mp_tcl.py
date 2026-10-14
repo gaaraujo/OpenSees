@@ -86,7 +86,7 @@ def main() -> int:
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
     out = open(args.out, "a", encoding="utf-8")
-    out.write(json.dumps({"meta": {"platform": platform.platform(), "exe": args.exe,
+    out.write(json.dumps({"meta": {**bs.run_stamp(), "platform": platform.platform(), "exe": args.exe,
                                    "motion": motion.name, "start_time": motion.strong_start(),
                                    "steps": args.steps, "dyn_test": bs.DYN_TEST,
                                    "distributed": True, "tcl": True}}) + "\n")
