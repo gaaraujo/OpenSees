@@ -62,10 +62,21 @@ INTEGRATOR = "Newmark"
 TRACE = False                # --trace: record the surface corner node's x displacement
 
 
-def script(material, size, alg, system_line, motion, steps):
+SLAB = False                 # --slab: each rank builds its own slab (no partition, see tcl_slabs)
+
+
+def script(material, size, alg, system_line, motion, steps, nproc=None, workdir=None):
     refine, plan = SIZES[size]
     integ, dyn_alg = INTEGRATORS[INTEGRATOR]
-    return (bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
+    if SLAB:
+        for r, text in enumerate(bs.tcl_slabs(refine, material, plan, nproc)):
+            with open(os.path.join(workdir, f"rank_{r}.tcl"), "w") as f:
+                f.write(text)
+        build = ("source rank_[getPID].tcl\n"
+                 "if {[getPID] == 0} {\n" + bs.tcl_input(motion) + "}\n")
+    else:
+        build = bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
+    return (build
             + bs.tcl_analysis(system_line, ALGORITHMS[alg], material, motion=motion,
                               dyn_steps=steps, numberer=NUMBERER, input_defined=True,
                               rank0_only=True, result_file=RESULT_FILE,
@@ -107,9 +118,11 @@ def main() -> int:
     ap.add_argument("--integrator", default="Newmark", choices=list(INTEGRATORS))
     ap.add_argument("--trace", action="store_true",
                     help="record the surface corner node's x displacement every transient step")
+    ap.add_argument("--slab", action="store_true",
+                    help="each rank builds a horizontal slab of the column (no partition)")
     args = ap.parse_args()
-    global NUMBERER, INTEGRATOR, TRACE
-    NUMBERER, INTEGRATOR, TRACE = args.numberer, args.integrator, args.trace
+    global NUMBERER, INTEGRATOR, TRACE, SLAB
+    NUMBERER, INTEGRATOR, TRACE, SLAB = args.numberer, args.integrator, args.trace, args.slab
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
@@ -135,7 +148,7 @@ def main() -> int:
                         path = os.path.join(workdir, "run.tcl")
                         with open(path, "w") as f:
                             f.write(script(material, size, alg, SYSTEMS[name], motion,
-                                           args.steps))
+                                           args.steps, nproc=nproc, workdir=workdir))
                         t0 = time.perf_counter()
                         try:
                             res = subprocess.run([args.mpiexec, "-n", str(nproc), args.exe,
@@ -164,6 +177,7 @@ def main() -> int:
                         rec.update({"material": material, "size": size, "np": nproc,
                                     "algorithm": alg, "config": name, "numberer": NUMBERER,
                                     "integrator": INTEGRATOR,
+                                    "build": "slab" if SLAB else "partition",
                                     "wall_seconds": time.perf_counter() - t0})
                         traces = glob.glob(os.path.join(workdir, "trace_*.txt"))
                         if traces:

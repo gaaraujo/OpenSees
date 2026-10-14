@@ -192,6 +192,54 @@ def _commands(refine: int, material: str, plan: int | None = None):
     yield "rayleigh", (alpha_m, beta_k, 0.0, 0.0)
 
 
+def tcl_slabs(refine: int = 1, material: str = "elastic", plan: int | None = None,
+              nparts: int = 2) -> list[str]:
+    """Per-rank Tcl for OpenSeesMP without ``partition``: rank r builds only a horizontal slab
+    of element layers, so memory scales with the model, not with ranks x model.
+
+    Every rank defines the materials and Rayleigh damping; rank r the nodes of z-levels
+    k0..k1 and the elements of layers k0..k1-1, so the boundary planes are shared with the
+    neighbouring slabs. The laminar ties link nodes at one height, so a slab holds every tie
+    of its levels; ties on a shared plane are defined on both ranks, so both subdomains
+    eliminate the same constrained dofs. Rank 0 also holds the base (fixities, base ties,
+    dashpots, ghost node); the input pattern (:func:`tcl_input`) goes on rank 0 as well.
+    """
+    xs, ys, zs, _ = grid(refine, plan)
+    nx, ny, nz = len(xs) - 1, len(ys) - 1, len(zs) - 1
+    if nparts > nz:
+        raise ValueError(f"{nparts} slabs for {nz} element layers")
+    bounds = [round(r * nz / nparts) for r in range(nparts + 1)]
+    per_plane = (nx + 1) * (ny + 1)
+    node_k = lambda tag: (tag - 1) // per_plane  # noqa: E731
+    ele_k = lambda tag: (tag - 1) // (nx * ny)   # noqa: E731
+    base = {GHOST_NODE, DASHPOT_ELE_X, DASHPOT_ELE_Y}
+
+    def fmt(cmd, args):
+        return cmd + " " + " ".join(repr(a) if isinstance(a, float) else str(a) for a in args)
+
+    out = [["wipe"] for _ in range(nparts)]
+    for cmd, args in _commands(refine, material, plan):
+        if cmd in ("model", "nDMaterial", "uniaxialMaterial", "rayleigh"):
+            ranks = range(nparts)
+        elif cmd in ("node", "fix") and args[0] in base or cmd == "element" and args[1] in base:
+            ranks = [0]
+        elif cmd == "node" or cmd == "fix":
+            k = node_k(args[0])
+            ranks = [r for r in range(nparts) if bounds[r] <= k <= bounds[r + 1]]
+        elif cmd == "equalDOF":
+            k = node_k(args[1])
+            ranks = [r for r in range(nparts) if bounds[r] <= k <= bounds[r + 1]]
+        elif cmd == "element":
+            k = ele_k(args[1])
+            ranks = [r for r in range(nparts) if bounds[r] <= k < bounds[r + 1]]
+        else:
+            raise ValueError(f"tcl_slabs: unhandled command {cmd}")
+        line = fmt(cmd, args)
+        for r in ranks:
+            out[r].append(line)
+    return ["\n".join(lines) + "\n" for lines in out]
+
+
 def tie_violation(ops, refine: int = 1, material: str = "elastic", plan: int | None = None) -> dict:
     """Largest |u_retained - u_constrained| over the equalDOF ties, absolute and relative to
     the largest tied displacement. Zero (to round-off) under Transformation; under Penalty
