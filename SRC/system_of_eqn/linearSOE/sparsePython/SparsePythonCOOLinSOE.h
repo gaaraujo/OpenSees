@@ -20,11 +20,15 @@ class SparsePythonCOOLinSOE : public LinearSOE
   public:
     using MatrixStatus = SparsePythonMatrixStatus;
 
-    explicit SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver);
-    SparsePythonCOOLinSOE();
+    using MatrixType = SparsePythonMatrixType;
+
+    explicit SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver,
+                                   MatrixType type = MatrixType::GENERAL);
+    explicit SparsePythonCOOLinSOE(MatrixType type = MatrixType::GENERAL);
     ~SparsePythonCOOLinSOE() override;
 
     SparsePythonStorageScheme getStorageScheme() const { return SparsePythonStorageScheme::COO; }
+    MatrixType getMatrixType() const { return theMatrixType; }
 
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;
@@ -78,6 +82,7 @@ class SparsePythonCOOLinSOE : public LinearSOE
     Vector bVector;
 
     MatrixStatus matrixStatus;
+    MatrixType theMatrixType;
 
     friend class SparsePythonCOOLinSolver;
 };

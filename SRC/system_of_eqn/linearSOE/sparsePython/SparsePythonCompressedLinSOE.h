@@ -50,12 +50,17 @@ class SparsePythonCompressedLinSOE : public LinearSOE
 
     using MatrixStatus = SparsePythonMatrixStatus;
 
+    using MatrixType = SparsePythonMatrixType;
+
     SparsePythonCompressedLinSOE(SparsePythonCompressedLinSolver &theSolver,
-                                 StorageScheme scheme = StorageScheme::CSR);
-    explicit SparsePythonCompressedLinSOE(StorageScheme scheme = StorageScheme::CSR);
+                                 StorageScheme scheme = StorageScheme::CSR,
+                                 MatrixType type = MatrixType::GENERAL);
+    explicit SparsePythonCompressedLinSOE(StorageScheme scheme = StorageScheme::CSR,
+                                          MatrixType type = MatrixType::GENERAL);
     ~SparsePythonCompressedLinSOE() override;
 
     StorageScheme getStorageScheme() const { return storageScheme; }
+    MatrixType getMatrixType() const { return theMatrixType; }
 
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;
@@ -116,6 +121,7 @@ class SparsePythonCompressedLinSOE : public LinearSOE
 
     MatrixStatus matrixStatus;
     StorageScheme storageScheme;
+    MatrixType theMatrixType;
 
     friend class SparsePythonCompressedLinSolver;
 };
