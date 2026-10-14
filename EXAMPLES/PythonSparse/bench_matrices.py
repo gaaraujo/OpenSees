@@ -122,6 +122,16 @@ def iterations(solver):
     return getattr(st, "last_num_iterations", None) if st is not None else None
 
 
+def ordering_perm(A, ordering):
+    if ordering == "exported":
+        return None
+    if ordering == "rcm":
+        from scipy.sparse.csgraph import reverse_cuthill_mckee
+
+        return reverse_cuthill_mckee(A.tocsr(), symmetric_mode=True)
+    return np.random.default_rng(1).permutation(A.shape[0])
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("matrices", nargs="+")
@@ -131,6 +141,10 @@ def main() -> int:
     ap.add_argument("--resolve", type=int, default=5)
     ap.add_argument("--only", nargs="*", default=None)
     ap.add_argument("--skip", nargs="*", default=None)
+    ap.add_argument("--orderings", nargs="+", default=["exported", "rcm", "random"],
+                    choices=["exported", "rcm", "random"],
+                    help="symmetric permutations P A P^T applied before solving (the "
+                         "exported order is the OpenSees numberer's)")
     ap.add_argument("--min-n", type=int, default=0)
     ap.add_argument("--max-n", type=int, default=10**9)
     ap.add_argument("--max-call-seconds", type=float, default=120.0,
@@ -153,11 +167,29 @@ def main() -> int:
         symmetric = asym < 1e-10
         nb = np.linalg.norm(b0)
         print(f"== {Path(path).name}: n={n} nnz={A.nnz} asym={asym:.1e}", flush=True)
-        for rtol in args.rtol:
+        A_exp, b_exp = A, b0
+        for ordering in args.orderings:
+          perm = ordering_perm(A_exp, ordering)
+          if perm is None:
+              A, b0 = A_exp, b_exp
+          else:
+              A = A_exp[perm][:, perm].tocsr()
+              A.sort_indices()
+              b0 = b_exp[perm]
+          for rtol in args.rtol:
             for name, make in configs(rtol, symmetric).items():
                 inexact = bc.is_inexact(name) or "pyamg" in name
                 if rtol != args.rtol[0] and not inexact:
                     continue      # direct solvers do not depend on rtol
+                if ordering != "exported":
+                    # reordered: iterative at the middle rtol; direct only as a check
+                    if inexact and rtol != args.rtol[len(args.rtol) // 2]:
+                        continue
+                    if not inexact and (ordering != "random" or not any(
+                            s in name for s in ("pardiso symmetric", "cuDSS spd"))):
+                        continue
+                    if "float32" in name or "hybrid" in name:
+                        continue
                 if args.only and not any(s in name for s in args.only):
                     continue
                 if args.skip and any(s in name for s in args.skip):
@@ -189,14 +221,15 @@ def main() -> int:
                     if dt > args.max_call_seconds or err:
                         break
                 rec = {"matrix": Path(path).name, "n": n, "nnz": int(A.nnz), "asym": asym,
-                       "config": name, "rtol": rtol if inexact else None, "calls": calls}
+                       "config": name, "rtol": rtol if inexact else None, "calls": calls,
+                       "ordering": ordering}
                 out.write(json.dumps(rec) + "\n")
                 out.flush()
                 fac = [c["seconds"] for c in calls if c["status"] == "COEFFICIENTS_CHANGED"]
                 sol = [c["seconds"] for c in calls if c["status"] == "UNCHANGED"]
                 its = [c["iterations"] for c in calls if c["iterations"] is not None]
                 bad = sum(1 for c in calls if c["ok"] != 0)
-                print(f"   {name:28s} rtol={rtol if inexact else '-':<6} "
+                print(f"   {ordering[:4]:4s} {name:28s} rtol={rtol if inexact else '-':<6} "
                       f"setup {1e3 * calls[0]['seconds']:9.1f} ms  "
                       f"refactor+solve {1e3 * np.median(fac) if fac else np.nan:9.1f} ms  "
                       f"solve {1e3 * np.median(sol) if sol else np.nan:8.1f} ms  "
