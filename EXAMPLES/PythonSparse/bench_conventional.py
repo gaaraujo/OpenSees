@@ -239,8 +239,9 @@ def configurations():
                 cfgs[f"pkg cupy cg {pname}"] = (lambda M=M: ("PythonSparse", ocp.cg(
                     rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=M, callback=_noop, record_stats=True).to_openseespy()))
             # ILU is not a symmetric preconditioner: pair it with GMRES
+            # cupyx gmres: maxiter counts TOTAL iterations (scipy: restart cycles)
             cfgs["pkg cupy gmres ilu0"] = lambda: ("PythonSparse", ocp.gmres(
-                rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER // 50, M=cprec.ilu, callback=_noop,
+                rtol=ITER_RTOL, restart=50, maxiter=ITER_MAXITER, M=cprec.ilu, callback=_noop,
                 record_stats=True).to_openseespy())
             cfgs["pkg cupy cg jacobi float32"] = lambda: ("PythonSparse", ocp.cg(
                 rtol=ITER_RTOL, maxiter=ITER_MAXITER, M=cprec.jacobi, dtype=np.float32, callback=_noop,
