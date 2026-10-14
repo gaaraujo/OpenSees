@@ -114,6 +114,8 @@ def main() -> int:
                             ok = (0 if phases and all(p["ok"] == 0 for p in phases.values())
                                   and "transient" in phases else -1)
                             rec = {"ok": ok, "neq": neq, "phases": phases}
+                            if ok != 0:
+                                rec["error"] = (res.stdout + res.stderr)[-1500:]
                             if not phases:
                                 rec = {"ok": -999, "error": (res.stdout + res.stderr)[-600:]}
                         except subprocess.TimeoutExpired:
