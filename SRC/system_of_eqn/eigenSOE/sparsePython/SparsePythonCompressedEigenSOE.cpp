@@ -177,6 +177,23 @@ SparsePythonCompressedEigenSOE::getMatrixStatus() const
     return matrixStatus;
 }
 
+int
+SparsePythonCompressedEigenSOE::resizeVectors(int size)
+{
+    if (size < 0) {
+        opserr << "WARNING: SparsePythonCompressedEigenSOE::resizeVectors - size < 0\n";
+        return -1;
+    }
+
+    // Keep getNumEqn() == size via indexPtr length; no values/pattern on workers.
+    indexPtr.assign(static_cast<std::size_t>(size) + 1u, 0);
+    indices.clear();
+    kValues.clear();
+    mValues.clear();
+    matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    return 0;
+}
+
 void
 SparsePythonCompressedEigenSOE::updateMatrixStatus()
 {

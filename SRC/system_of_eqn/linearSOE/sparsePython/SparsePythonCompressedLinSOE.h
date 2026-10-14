@@ -86,6 +86,10 @@ class SparsePythonCompressedLinSOE : public LinearSOE
     int setPythonSolver(SparsePythonCompressedLinSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const;
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side resize: allocate X/B only (no sparse pattern). */
+    int resizeVectors(int size);
 
     const std::vector<int> &getIndexPtr(void) const { return indexPtr; }
     const std::vector<int> &getIndices(void) const { return indices; }
