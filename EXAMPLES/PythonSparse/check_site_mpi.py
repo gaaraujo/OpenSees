@@ -57,7 +57,12 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--motion", default=None)
     ap.add_argument("--motion-dt", type=float, default=0.005)
+    ap.add_argument("--tol", type=float, default=None,
+                    help="override the gravity and transient NormDispIncr tolerances")
     args = ap.parse_args()
+    if args.tol:
+        bs.GRAVITY_TEST = ("NormDispIncr", args.tol, 50)
+        bs.DYN_TEST = ("NormDispIncr", args.tol, 50)
     motion = bs.Motion.from_file(args.motion, args.motion_dt) if args.motion else None
     ok_all = True
     for material in ("elastic", "pimy"):
@@ -95,8 +100,9 @@ def main() -> int:
             ok_all &= good
             print(f"[rank {PID}/{NP}] {material:7s} {name:42s} local nodes {len(d):5d} "
                   f"max|du|/max|u| {rel:.1e} iters {'same' if same_iters else 'DIFFER'} "
-                  f"(transient {sum(its.get('transient', []))} vs "
-                  f"{sum(it_ref['transient'])}) -> {'ok' if good else 'FAIL'}", flush=True)
+                  f"(total per phase {[sum(v) for v in its.values()]} vs "
+                  f"{[sum(v) for v in it_ref.values()]}) -> {'ok' if good else 'FAIL'}",
+                  flush=True)
     return 0 if ok_all else 1
 
 
