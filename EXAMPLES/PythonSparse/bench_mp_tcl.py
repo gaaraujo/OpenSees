@@ -46,13 +46,14 @@ SYSTEMS = {
 
 
 RESULT_FILE = "result.txt"   # rank 0 writes its RESULT lines here (in the run directory)
+NUMBERER = "ParallelRCM"     # --numberer; ParallelPlain leaves the ordering to the solver
 
 
 def script(material, size, alg, system_line, motion, steps):
     refine, plan = SIZES[size]
     return (bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
             + bs.tcl_analysis(system_line, ALGORITHMS[alg], material, motion=motion,
-                              dyn_steps=steps, numberer="ParallelRCM", input_defined=True,
+                              dyn_steps=steps, numberer=NUMBERER, input_defined=True,
                               rank0_only=True, result_file=RESULT_FILE))
 
 
@@ -86,7 +87,10 @@ def main() -> int:
     ap.add_argument("--systems", nargs="+", default=list(SYSTEMS), choices=list(SYSTEMS))
     ap.add_argument("--steps", type=int, default=200)
     ap.add_argument("--max-seconds", type=float, default=1800.0)
+    ap.add_argument("--numberer", default="ParallelRCM", choices=["ParallelRCM", "ParallelPlain"])
     args = ap.parse_args()
+    global NUMBERER
+    NUMBERER = args.numberer
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
@@ -139,7 +143,7 @@ def main() -> int:
                                     else ["pkill", "-f", args.exe])
                             subprocess.run(kill, capture_output=True)
                         rec.update({"material": material, "size": size, "np": nproc,
-                                    "algorithm": alg, "config": name,
+                                    "algorithm": alg, "config": name, "numberer": NUMBERER,
                                     "wall_seconds": time.perf_counter() - t0})
                         out.write(json.dumps(rec) + "\n")
                         out.flush()
