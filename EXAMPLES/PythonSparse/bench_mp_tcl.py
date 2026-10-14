@@ -85,6 +85,10 @@ def main() -> int:
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
+    if os.name != "nt":
+        # Inside a Slurm job (and a container) Hydra must fork the ranks locally
+        # instead of launching them through Slurm.
+        env.setdefault("I_MPI_HYDRA_BOOTSTRAP", "fork")
     out = open(args.out, "a", encoding="utf-8")
     out.write(json.dumps({"meta": {**bs.run_stamp(), "platform": platform.platform(), "exe": args.exe,
                                    "motion": motion.name, "start_time": motion.strong_start(),
@@ -121,8 +125,9 @@ def main() -> int:
                         except subprocess.TimeoutExpired:
                             rec = {"ok": -997, "error": f"timeout after {args.max_seconds} s"}
                             skipped.add(key)
-                            subprocess.run(["taskkill", "/F", "/IM", Path(args.exe).name],
-                                           capture_output=True)
+                            kill = (["taskkill", "/F", "/IM", Path(args.exe).name] if os.name == "nt"
+                                    else ["pkill", "-f", args.exe])
+                            subprocess.run(kill, capture_output=True)
                         rec.update({"material": material, "size": size, "np": nproc,
                                     "algorithm": alg, "config": name,
                                     "wall_seconds": time.perf_counter() - t0})
