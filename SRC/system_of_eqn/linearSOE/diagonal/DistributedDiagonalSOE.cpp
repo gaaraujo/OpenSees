@@ -436,7 +436,7 @@ DistributedDiagonalSOE::setB(const Vector &v, double fact)
 }
 
 void 
-DistributedDiagonalSOE::zeroA(void)
+DistributedDiagonalSOE::zeroAAssembled(void)
 {
   double *Aptr = A;
   for (int i=0; i<size; i++)

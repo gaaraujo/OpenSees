@@ -55,7 +55,7 @@ class DistributedSparseGenColLinSOE : public SparseGenColLinSOE
     int setB(const Vector &, double fact = 1.0);            
     const Vector &getB(void);
     void zeroB(void);
-    int solve(void);
+    int solveAssembled(void);
 
 
     int sendSelf(int commitTag, Channel &theChannel);

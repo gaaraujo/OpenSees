@@ -61,7 +61,7 @@ class MumpsParallelSOE : public MumpsSOE
     const Vector &getB(void);
     const Vector &getB(bool localOnly) override;
     void zeroB(void);
-    int solve(void);
+    int solveAssembled(void);
 
     int sendSelf(int commitTag, Channel &theChannel);
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);    
@@ -69,8 +69,10 @@ class MumpsParallelSOE : public MumpsSOE
 
     int setProcessID(int processTag);
     int setChannels(int numChannels, Channel **theChannels);
+    int getProcessID(void) const override { return processID; }
+    int reduceSum(Vector &v) override { return reduceSumChannels(v, processID, numChannels, theChannels); }
 
-    int formAp(const Vector &p, Vector &Ap) override;
+    int formApAssembled(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
 
   protected:

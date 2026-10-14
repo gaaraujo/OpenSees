@@ -37,31 +37,29 @@ class ModalDamping
     explicit ModalDamping(IncrementalIntegrator &owner);
     ~ModalDamping();
 
+    // M Phi for the current eigenpairs (summed over the ranks in OpenSeesMP)
     int setupModal(const Vector *factors);
 
     // modal damping force on the RHS: f = C v
     int addToUnbalance(const Vector *factors);
 
-    // legacy MODAL_DAMPING_INCL_MATRIX: add dense modal columns into A
+    // c_C C in the coefficient matrix of the integrator's LinearSOE, by the domain's option:
+    // quick nothing, legacy dense columns, woodbury the low-rank term of the LinearSOE
     int addToTangent(const Vector *factors, double cFactor);
-
-    // woodbury: setup modal workspace and fill Q (n×k), diagD (k); returns
-    // active mode count (>0), 0 if nothing to add, <0 on error
-    int prepareWoodburyLowRank(const Vector *factors, double cFactor, int numDOF,
-                               Matrix &Q, Vector &diagD);
-
-    // woodbury: fill Q (n×k) and diagD (k) = cFactor*2*zeta*omega for active modes
-    int buildSymmetricLowRank(const Vector *factors, double cFactor,
-                              Matrix &Q, Vector &diagD);
 
     // number of active modes for the given factors (eigenvalue>0, xi!=0)
     int countActiveModes(const Vector *factors) const;
 
   private:
+    // Q (n x J) = M Phi of the active modes, diagD (J) = cFactor*2*xi*omega
+    int buildSymmetricLowRank(const Vector *factors, double cFactor,
+                              Matrix &Q, Vector &diagD);
+
     IncrementalIntegrator *theIntegrator;
     double *eigenVectors;
     Vector *eigenValues;
     Vector *dampingForces;
+    int numDOFModal;
 };
 
 #endif

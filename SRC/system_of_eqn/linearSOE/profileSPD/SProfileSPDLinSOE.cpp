@@ -431,7 +431,7 @@ SProfileSPDLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-SProfileSPDLinSOE::zeroA(void)
+SProfileSPDLinSOE::zeroAAssembled(void)
 {
     float *Aptr = A;
     for (int i=0; i<Asize; i++)

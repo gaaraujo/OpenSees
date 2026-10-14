@@ -431,7 +431,7 @@ SparseGenColLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-SparseGenColLinSOE::zeroA(void)
+SparseGenColLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     for (int i=0; i<Asize; i++)
@@ -480,7 +480,7 @@ SparseGenColLinSOE::formApWithValues(const Vector &avals, const Vector &p, Vecto
 }
 
 int
-SparseGenColLinSOE::formAp(const Vector &p, Vector &Ap)
+SparseGenColLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
     if (size == 0) {
 	Ap.Zero();

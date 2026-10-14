@@ -393,7 +393,7 @@ SparseGenRowLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-SparseGenRowLinSOE::zeroA(void)
+SparseGenRowLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     for (int i=0; i<Asize; i++)

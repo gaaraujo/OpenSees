@@ -55,10 +55,10 @@ public:
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);        
     
-    void zeroA(void);
+    void zeroAAssembled(void);
     void zeroB(void);
 
-    int formAp(const Vector &p, Vector &Ap) override;
+    int formApAssembled(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
     
     const Vector &getX(void);

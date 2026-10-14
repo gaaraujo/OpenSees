@@ -33,7 +33,7 @@ class SparsePythonCOOLinSOE : public LinearSOE
     int addB(const Vector &, const ID &, double fact = 1.0) override;
     int setB(const Vector &, double fact = 1.0) override;
 
-    void zeroA(void) override;
+    void zeroAAssembled(void) override;
     void zeroB(void) override;
 
     const Vector &getX(void) override;
@@ -42,7 +42,7 @@ class SparsePythonCOOLinSOE : public LinearSOE
 
     void setX(int loc, double value) override;
     void setX(const Vector &X) override;
-    int solve(void) override;
+    int solveAssembled(void) override;
 
     int sendSelf(int commitTag, Channel &theChannel) override;
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker) override;

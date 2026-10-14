@@ -344,7 +344,7 @@ DistributedBandSPDLinSOE::addA(const Matrix &m, const ID &id, double fact)
 }
 
 int 
-DistributedBandSPDLinSOE::solve(void)
+DistributedBandSPDLinSOE::solveAssembled(void)
 {
 
   static ID result(1);
@@ -405,7 +405,7 @@ DistributedBandSPDLinSOE::solve(void)
     }
 
     // solve
-    result(0) = this->LinearSOE::solve();
+    result(0) = this->LinearSOE::solveAssembled();
 
     // send results back
     for (int j=0; j<numChannels; j++) {

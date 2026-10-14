@@ -55,7 +55,7 @@ class PFEMLinSOE : public LinearSOE
 
     virtual ~PFEMLinSOE();
 
-    virtual int solve(void);
+    virtual int solveAssembled(void);
 
     virtual int getNumEqn(void) const;
     virtual int setSize(Graph& theGraph);
@@ -63,7 +63,7 @@ class PFEMLinSOE : public LinearSOE
     virtual int addB(const Vector &, const ID &, double fact = 1.0);
     virtual int setB(const Vector &, double fact = 1.0);
 
-    virtual void zeroA(void);
+    virtual void zeroAAssembled(void);
     virtual void zeroB(void);
 
     virtual const Vector &getX(void);

@@ -469,7 +469,7 @@ MumpsSOE::setB(const Vector &v, double fact)
 }
 
 void 
-MumpsSOE::zeroA(void)
+MumpsSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     for (int i=0; i<nnz; i++)

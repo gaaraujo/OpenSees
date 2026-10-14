@@ -150,15 +150,15 @@ public:
     int setDeviceAValues(const void *deviceSrc, int numNnz);
     int setDeviceRowPtrs(const int *deviceSrc);
     int setDeviceColIndices(const int *deviceSrc);
-    void zeroA(void) override;
+    void zeroAAssembled(void) override;
     void zeroB(void) override;
     const Vector &getX(void) override;
     const Vector &getB(void) override;
     double normRHS(void) override;   
     void setX(int loc, double value) override;
     void setX(const Vector &x) override;
-    int solve(void) override;
-    int formAp(const Vector &p, Vector &Ap) override;
+    int solveAssembled(void) override;
+    int formApAssembled(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
     
     // Set and get the associated CudaBcsrLinSolver object

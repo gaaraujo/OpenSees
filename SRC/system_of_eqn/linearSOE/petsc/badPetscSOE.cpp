@@ -355,7 +355,7 @@ PetscSOE::setB(const Vector &v, double fact)
 
 
 void 
-PetscSOE::zeroA(void)
+PetscSOE::zeroAAssembled(void)
 {
   isFactored = 0;
   int ierr = MatZeroEntries(A); CHKERRA(ierr);   

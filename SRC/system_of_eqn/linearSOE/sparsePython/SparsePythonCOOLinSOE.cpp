@@ -246,7 +246,7 @@ SparsePythonCOOLinSOE::setB(const Vector &v, double fact)
 }
 
 void
-SparsePythonCOOLinSOE::zeroA(void)
+SparsePythonCOOLinSOE::zeroAAssembled(void)
 {
     std::fill(values.begin(), values.end(), 0.0);
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
@@ -302,9 +302,9 @@ SparsePythonCOOLinSOE::setX(const Vector &X)
 }
 
 int
-SparsePythonCOOLinSOE::solve(void)
+SparsePythonCOOLinSOE::solveAssembled(void)
 {
-    int status = this->LinearSOE::solve();
+    int status = this->LinearSOE::solveAssembled();
     if (status < 0) {
         return status;
     }

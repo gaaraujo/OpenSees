@@ -54,7 +54,7 @@ class DistributedBandGenLinSOE : public BandGenLinSOE
     int setB(const Vector &, double fact = 1.0);            
     void zeroB(void);
     const Vector &getB(void);
-    int solve(void);
+    int solveAssembled(void);
 
     int sendSelf(int commitTag, Channel &theChannel);
     int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);    

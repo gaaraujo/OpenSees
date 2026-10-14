@@ -345,7 +345,7 @@ ExplicitAlphaMultiSOE::setGlobalRhs(LinearSOE *soe, const Vector &b) const
         return -1;
     soe->zeroB();
     // Gather-add SOEs sum myB across ranks in solve(). A global RHS that already
-    // lives on every rank must be installed only on P0 (Woodbury/Arpack pattern).
+    // lives on every rank must be installed only on P0 (as ArpackSOE).
     if (processID > 0)
         return 0;
     if (soe->setB(b) < 0)

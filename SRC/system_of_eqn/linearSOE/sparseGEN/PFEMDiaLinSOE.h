@@ -48,7 +48,7 @@ class PFEMDiaLinSOE : public PFEMLinSOE
     virtual ~PFEMDiaLinSOE();
 
     virtual int addA(const Matrix &, const ID &, double fact = 1.0);
-    virtual void zeroA(void);
+    virtual void zeroAAssembled(void);
     
     virtual int sendSelf(int commitTag, Channel &theChannel);
     virtual int recvSelf(int commitTag, Channel &theChannel, FEM_ObjectBroker &theBroker);    

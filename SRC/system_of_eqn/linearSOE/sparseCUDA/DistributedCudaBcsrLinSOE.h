@@ -46,17 +46,17 @@ public:
     int addA(const Matrix &) override;
     int addB(const Vector &, const ID &, double fact = 1.0) override;
     int setB(const Vector &, double fact = 1.0) override;
-    void zeroA(void) override;
+    void zeroAAssembled(void) override;
     void zeroB(void) override;
     const Vector &getX(void) override;
     const Vector &getB(void) override;
-    /** localOnly=true: this rank's RHS, without the gather of getB() (WoodburySOE snapshots). */
+    /** localOnly=true: this rank's RHS, without the gather of getB() (LinearSOE::solveAssembled(b, x)). */
     const Vector &getB(bool localOnly) override;
     double normRHS(void) override;
     void setX(int loc, double value) override;
     void setX(const Vector &x) override;
-    int solve(void) override;
-    int formAp(const Vector &p, Vector &Ap) override;
+    int solveAssembled(void) override;
+    int formApAssembled(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
     int saveSparseA(OPS_Stream &output, int baseIndex = 0) override;
 
@@ -65,7 +65,8 @@ public:
 
     int setProcessID(int processTag);
     int setChannels(int numChannels, Channel **theChannels);
-    int getProcessID(void) const { return processID; }
+    int getProcessID(void) const override { return processID; }
+    int reduceSum(Vector &v) override { return reduceSumChannels(v, processID, numChannels, theChannels); }
 
     CudaBcsrLinSOE *getCudaBcsrLinSOE(void) { return theCudaSOE; }
 

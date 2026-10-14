@@ -600,7 +600,7 @@ DistributedSparseGenRowLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-DistributedSparseGenRowLinSOE::zeroA(void)
+DistributedSparseGenRowLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     for (int i=0; i<Asize; i++)

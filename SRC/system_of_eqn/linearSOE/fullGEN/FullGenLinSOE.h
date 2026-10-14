@@ -59,10 +59,10 @@ class FullGenLinSOE : public LinearSOE
     int setB(const Vector &, double fact = 1.0);        
     int addColA(const Vector &col, int colIndex, double fact = 1.0);
     
-    void zeroA(void);
+    void zeroAAssembled(void);
     void zeroB(void);
     
-    int formAp(const Vector &p, Vector &Ap);
+    int formApAssembled(const Vector &p, Vector &Ap);
 
     const Vector &getX(void);
     const Vector &getB(void);    

@@ -304,7 +304,7 @@ DiagonalSOE::setB(const Vector &v, double fact)
 }
 
 void 
-DiagonalSOE::zeroA(void)
+DiagonalSOE::zeroAAssembled(void)
 {
   double *Aptr = A;
   for (int i=0; i<size; i++)
@@ -322,7 +322,7 @@ DiagonalSOE::zeroB(void)
 }
 
 int
-DiagonalSOE::formAp(const Vector &p, Vector &Ap)
+DiagonalSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
   double *Aptr = A;
   for (int i = 0; i < size; i++, Aptr++)

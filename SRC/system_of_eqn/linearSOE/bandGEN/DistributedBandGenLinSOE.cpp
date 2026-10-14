@@ -388,7 +388,7 @@ DistributedBandGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 }
 
 int 
-DistributedBandGenLinSOE::solve(void)
+DistributedBandGenLinSOE::solveAssembled(void)
 {
   static ID result(1);
 
@@ -452,7 +452,7 @@ DistributedBandGenLinSOE::solve(void)
     }
     
     // solve
-    result(0) = this->LinearSOE::solve();
+    result(0) = this->LinearSOE::solveAssembled();
 
     // send results back
     for (int j=0; j<numChannels; j++) {

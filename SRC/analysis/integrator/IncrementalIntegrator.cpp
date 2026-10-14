@@ -32,7 +32,6 @@
 
 #include <IncrementalIntegrator.h>
 #include <ModalDamping.h>
-#include <WoodburySOE.h>
 #include <FE_Element.h>
 #include <LinearSOE.h>
 #include <AnalysisModel.h>
@@ -453,40 +452,6 @@ ModalDamping *
 IncrementalIntegrator::getModalDamping(void)
 {
   return theModalDamping;
-}
-
-int
-IncrementalIntegrator::addModalDampingWoodbury(const Vector *modalFactors)
-{
-  if (modalFactors == nullptr || theSOE == nullptr)
-    return 0;
-
-  WoodburySOE *wb = dynamic_cast<WoodburySOE *>(theSOE);
-  if (wb == nullptr) {
-    opserr << "WARNING IncrementalIntegrator::addModalDampingWoodbury() - "
-              "modalDamping -woodbury requires WoodburySOE wrapper on the analysis\n";
-    return -6;
-  }
-
-  if (theModalDamping == nullptr)
-    return -1;
-
-  Matrix Q;
-  Vector diagD;
-  const int built = theModalDamping->prepareWoodburyLowRank(
-      modalFactors, this->getCFactor(), theSOE->getNumEqn(), Q, diagD);
-
-  if (built == 0) {
-    wb->clearWoodburyBasis();
-    return 0;
-  }
-  if (built < 0)
-    return built;
-
-  if (wb->setWoodburySymmetric(Q, diagD) < 0)
-    return -7;
-
-  return wb->rebuildWoodburyBasis();
 }
 
 

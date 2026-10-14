@@ -340,7 +340,7 @@ PARDISOGenLinSOE::setB(const Vector &v, double fact)
 }
 
 void
-PARDISOGenLinSOE::zeroA(void)
+PARDISOGenLinSOE::zeroAAssembled(void)
 {
 	double *Aptr = A;
 	for (int i = 0; i < Asize; i++)

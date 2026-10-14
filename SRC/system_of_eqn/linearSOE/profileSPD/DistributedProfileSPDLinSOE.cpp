@@ -495,20 +495,20 @@ DistributedProfileSPDLinSOE::ensureMergedA(void)
 
 
 void
-DistributedProfileSPDLinSOE::zeroA(void)
+DistributedProfileSPDLinSOE::zeroAAssembled(void)
 {
-  ProfileSPDLinSOE::zeroA();
+  ProfileSPDLinSOE::zeroAAssembled();
   matrixDirty = true;
 }
 
 
 int 
-DistributedProfileSPDLinSOE::solve(void)
+DistributedProfileSPDLinSOE::solveAssembled(void)
 {
   static ID result(1);
 
   if (ensureMergedA() < 0) {
-    opserr << "WARNING DistributedProfileSPDLinSOE::solve() - ensureMergedA failed\n";
+    opserr << "WARNING DistributedProfileSPDLinSOE::solveAssembled() - ensureMergedA failed\n";
     return -1;
   }
 
@@ -541,7 +541,7 @@ DistributedProfileSPDLinSOE::solve(void)
       *vectB += *vectX;
     }
 
-    result(0) = this->LinearSOE::solve();
+    result(0) = this->LinearSOE::solveAssembled();
 
     for (int j=0; j<numChannels; j++) {
       Channel *theChannel = theChannels[j];
@@ -832,7 +832,7 @@ DistributedProfileSPDLinSOE::setChannels(int nChannels, Channel **theC)
 
 
 int
-DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
+DistributedProfileSPDLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
   if (size != p.Size() || size != Ap.Size()) {
     opserr << "WARNING DistributedProfileSPDLinSOE::formAp() - vectors must match global size "
@@ -851,7 +851,7 @@ DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
 
   // Serial / single process: local SpMV of unfactored profile (A or Aunfactored).
   if (numChannels <= 0 || theChannels == 0)
-    return ProfileSPDLinSOE::formAp(p, Ap);
+    return ProfileSPDLinSOE::formApAssembled(p, Ap);
 
   if (processID != 0) {
     if (theChannels[0] == 0) {
@@ -865,7 +865,7 @@ DistributedProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
     return 0;
   }
 
-  const int rc = ProfileSPDLinSOE::formAp(p, Ap);
+  const int rc = ProfileSPDLinSOE::formApAssembled(p, Ap);
   if (rc != 0)
     Ap.Zero();
 

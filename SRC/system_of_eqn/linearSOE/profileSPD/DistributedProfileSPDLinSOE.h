@@ -51,11 +51,11 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
     int addA(const Matrix &, const ID &, double fact = 1.0);
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);            
-    void zeroA(void);
+    void zeroAAssembled(void);
     int setB(const Vector &v, bool localOnly) override;
     void zeroB(void);
     int setSize(Graph &theGraph);
-    int solve(void);
+    int solveAssembled(void);
     const Vector &getB(void);
     const Vector &getB(bool localOnly) override;
 
@@ -71,8 +71,10 @@ class DistributedProfileSPDLinSOE : public ProfileSPDLinSOE
 
     int setProcessID(int processTag);
     int setChannels(int numChannels, Channel **theChannels);
+    int getProcessID(void) const override { return processID; }
+    int reduceSum(Vector &v) override { return reduceSumChannels(v, processID, numChannels, theChannels); }
 
-    int formAp(const Vector &p, Vector &Ap) override;
+    int formApAssembled(const Vector &p, Vector &Ap) override;
     LinearSOE *getCopy(void) const override;
 
   protected:

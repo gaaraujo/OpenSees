@@ -83,13 +83,11 @@ TransientIntegrator::formTangent(int statFlag)
     
     theLinSOE->zeroA();
 
-    // do modal damping (legacy incl-matrix tangent)
-    bool inclModalMatrix=theModel->inclModalDampingMatrix();
-    if (inclModalMatrix == true) {
-      const Vector *modalValues = theModel->getModalDampingFactors();
-      if (modalValues != 0) {
-	this->addModalDampingMatrix(modalValues);
-      }
+    // do modal damping: c_C C in the coefficient matrix (none for modalDampingQ)
+    const Vector *modalValues = theModel->getModalDampingFactors();
+    if (modalValues != 0 && this->addModalDampingMatrix(modalValues) < 0) {
+      opserr << "TransientIntegrator::formTangent() - failed to add modal damping\n";
+      result = -3;
     }
 
 
@@ -114,14 +112,6 @@ TransientIntegrator::formTangent(int statFlag)
 	}
     }
 
-    if (theModel->getModalDampingOption() == MODAL_DAMPING_WOODBURY) {
-      const Vector *modalValues = theModel->getModalDampingFactors();
-      if (modalValues != 0) {
-	int wb = this->addModalDampingWoodbury(modalValues);
-	if (wb < 0)
-	  result = wb;
-      }
-    }
 
     return result;
 }

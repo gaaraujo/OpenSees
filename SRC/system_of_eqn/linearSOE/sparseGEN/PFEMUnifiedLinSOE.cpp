@@ -198,7 +198,7 @@ PFEMUnifiedLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     
 void 
-PFEMUnifiedLinSOE::zeroA(void)
+PFEMUnifiedLinSOE::zeroAAssembled(void)
 {
     for(int i=0; i<M->nzmax; i++)
 	M->x[i] = 0.0;

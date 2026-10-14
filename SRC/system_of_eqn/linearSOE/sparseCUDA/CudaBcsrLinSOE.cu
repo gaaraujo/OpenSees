@@ -981,7 +981,7 @@ int CudaBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
     return 0;
 }
 
-void CudaBcsrLinSOE::zeroA(void)
+void CudaBcsrLinSOE::zeroAAssembled(void)
 {
     for (size_t i = 0; i < m_hostAValues.size(); i++) {
         m_hostAValues[i] = 0.0;
@@ -1102,7 +1102,7 @@ int CudaBcsrLinSOE::fillPaddedDiagonals(double value, bool autoCompute) {
     return 0;
 }
 
-int CudaBcsrLinSOE::solve(void)
+int CudaBcsrLinSOE::solveAssembled(void)
 {
     // Quick sanity check
     if (m_X.Size() == 0 || isMatrixEmpty()) {
@@ -1112,7 +1112,7 @@ int CudaBcsrLinSOE::solve(void)
     // Fill diagonal entries in rows beyond the original size
     if (m_matrixStatus != MatrixStatus::UNCHANGED && m_paddingEnabled) {
         if (fillPaddedDiagonals(0.0, true) != 0) {
-            opserr << "WARNING: CudaBcsrLinSOE::solve() - "
+            opserr << "WARNING: CudaBcsrLinSOE::solveAssembled() - "
                    << "Failed to fill padded diagonals" << endln;
             return -1;
         }
@@ -1142,7 +1142,7 @@ int CudaBcsrLinSOE::solve(void)
 
         return solverOk;
     } else {
-        opserr << "WARNING: CudaBcsrLinSOE::solve() - "
+        opserr << "WARNING: CudaBcsrLinSOE::solveAssembled() - "
                << "No CudaBcsrLinSolver available" << endln;
         return -1;
     }
@@ -1394,7 +1394,7 @@ CudaBcsrLinSOE::ensureSpMVOperator(void)
 }
 
 int
-CudaBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
+CudaBcsrLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
     const int n = getNumEqn();
     if (p.Size() != n || Ap.Size() != n) {

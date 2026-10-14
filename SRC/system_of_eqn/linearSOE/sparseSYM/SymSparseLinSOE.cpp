@@ -507,7 +507,7 @@ SymSparseLinSOE::setB(const Vector &v, double fact)
  * value of A needs to be changed.  e.g. if Newton-Raphson method is used
  * for analysis, after each iteration, the A matrix needs to be updated.
  */
-void SymSparseLinSOE::zeroA(void)
+void SymSparseLinSOE::zeroAAssembled(void)
 {
     memset(diag, 0, size*sizeof(double));
 

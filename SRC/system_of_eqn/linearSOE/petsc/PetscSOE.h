@@ -78,7 +78,7 @@ public:
 
     int setB(const Vector &, double fact = 1.0);
 
-    void zeroA(void);
+    void zeroAAssembled(void);
     void zeroB(void);
     void zeroM(void);
     void zeroK(void);

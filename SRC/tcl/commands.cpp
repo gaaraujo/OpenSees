@@ -407,7 +407,6 @@ extern void *OPS_DistributedCudaDirectSparseSolver(void);
 #include <EigenSOE.h>
 #include <EigenSolver.h>
 #include <ArpackSOE.h>
-#include <WoodburySOE.h>
 #include <ArpackSolver.h>
 #include <SymArpackSOE.h>
 #include <SymArpackSolver.h>
@@ -2841,7 +2840,7 @@ specifyAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 #ifdef _PARALLEL_INTERPRETERS
 	if (ExplicitAlphaMultiSOE *multi = dynamic_cast<ExplicitAlphaMultiSOE *>(theTransientIntegrator)) {
 	  // Serial SOEs keep processID=-1 so MultiSOE setB stays local on every rank
-	  // (parametric MP models). Gather-add SOEs get OPS_rank (Woodbury/Arpack).
+	  // (parametric MP models). Gather-add SOEs get OPS_rank (as ArpackSOE).
 	  int t = (theSOE != 0) ? theSOE->getClassTag() : -1;
 	  if (t == LinSOE_TAGS_MumpsParallelSOE ||
 	      t == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
@@ -3935,16 +3934,6 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
       theStaticAnalysis->setLinearSOE(*theSOE);
     if (theTransientAnalysis != 0) {
       theTransientAnalysis->setLinearSOE(*theSOE);
-#ifdef _PARALLEL_INTERPRETERS
-      int soeTag = theSOE->getClassTag();
-      if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-          soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
-          soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
-        theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
-      } else {
-        theTransientAnalysis->setWoodburyParallel(-1, 0, 0);
-      }
-#endif
     }
 
 #ifdef _PARALLEL_PROCESSING
@@ -5956,10 +5945,7 @@ eigenAnalysis(ClientData clientData, Tcl_Interp *interp, int argc,
 #ifdef _PARALLEL_INTERPRETERS
 	// OpenSeesMP: same pattern as MumpsParallelSOE
 	if (theSOE != 0) {
-	  LinearSOE *nativeSOE = theSOE;
-	  if (nativeSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
-	    nativeSOE = &((WoodburySOE *)nativeSOE)->getInnerSOE();
-	  int soeTag = nativeSOE->getClassTag();
+	  int soeTag = theSOE->getClassTag();
 	  if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
 	      soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
 	      soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
@@ -8914,19 +8900,6 @@ modalDamping(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **arg
   if (OPS_modalDamping() < 0)
     return TCL_ERROR;
 
-#ifdef _PARALLEL_INTERPRETERS
-  // OPS_Analysis is not compiled with _PARALLEL_INTERPRETERS; wire Woodbury here.
-  if (theTransientAnalysis != 0 && theSOE != 0) {
-    int soeTag = theSOE->getClassTag();
-    if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
-        soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
-        soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {
-      theTransientAnalysis->setWoodburyParallel(OPS_rank, numChannels, theChannels);
-    } else {
-      theTransientAnalysis->setWoodburyParallel(-1, 0, 0);
-    }
-  }
-#endif
 
   return TCL_OK;
 }

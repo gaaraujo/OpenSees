@@ -405,7 +405,7 @@ BandSPDLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-BandSPDLinSOE::zeroA(void)
+BandSPDLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     int theSize = Asize; 

@@ -146,7 +146,7 @@ ShadowPetscSOE::~ShadowPetscSOE()
 
 
 int 
-ShadowPetscSOE::solve(void)
+ShadowPetscSOE::solveAssembled(void)
 {
   sendData[0] = 1;
   sendData[1] = theSOE.isFactored;
@@ -325,7 +325,7 @@ ShadowPetscSOE::setB(const Vector &v, double fact)
 
 
 void 
-ShadowPetscSOE::zeroA(void)
+ShadowPetscSOE::zeroAAssembled(void)
 {
   sendData[0] = 3;
   MPI_Bcast(sendBuffer, 3, MPI_INT, 0, PETSC_COMM_WORLD);

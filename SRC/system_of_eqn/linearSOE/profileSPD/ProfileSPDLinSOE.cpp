@@ -492,7 +492,7 @@ ProfileSPDLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-ProfileSPDLinSOE::zeroA(void)
+ProfileSPDLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     for (int i=0; i<Asize; i++)
@@ -549,7 +549,7 @@ ProfileSPDLinSOE::profileSpMV(const double *Avals, const int *iDiag, int n,
 
 
 int
-ProfileSPDLinSOE::formAp(const Vector &p, Vector &Ap)
+ProfileSPDLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
     if (size != p.Size() || size != Ap.Size()) {
 	opserr << "WARNING ProfileSPDLinSOE::formAp() - vectors must match size "

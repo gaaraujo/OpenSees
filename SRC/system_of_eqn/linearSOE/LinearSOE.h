@@ -37,6 +37,12 @@
 // where A is a matrix and B,C and X are vectors. To solve the equation means
 // given A, B and C to find the unknown X such that the equation is satisfied.
 //
+// The coefficient matrix may carry a low-rank term, A = A_s + Q D Q^T, with A_s
+// assembled by the derived class and Q (n x J), D (J x J, diagonal) set by addLowRank().
+// solve(), formAp() and zeroA() are not virtual: they apply the low-rank term
+// (Woodbury identity for the solve) around the derived class's solveAssembled(),
+// formApAssembled() and zeroAAssembled(). zeroA() removes the low-rank term.
+//
 // What: "@(#) LinearSOE.h, revA"
 
 #include <MovableObject.h>
@@ -49,6 +55,7 @@ class Matrix;
 class Vector;
 class ID;
 class AnalysisModel;
+class Channel;
 
 class LinearSOE : public MovableObject
 {
@@ -57,7 +64,8 @@ class LinearSOE : public MovableObject
     LinearSOE(int classTag);    
     virtual ~LinearSOE();
 
-    virtual int solve(void);    
+    // A x = B with A = A_s + Q D Q^T
+    virtual int solve(void) final;
     virtual int setLinks(AnalysisModel &theModel);    
 
     // pure virtual functions
@@ -75,10 +83,21 @@ class LinearSOE : public MovableObject
     virtual int addA(const Matrix &);
     virtual int addColA(const Vector &col, int colIndex, double fact = 1.0);
 
-    virtual void zeroA(void) =0;
+    // zero A_s and remove the low-rank term
+    virtual void zeroA(void) final;
     virtual void zeroB(void) =0;
 
-    virtual int formAp(const Vector &p, Vector &Ap);
+    // Ap = A p with A = A_s + Q D Q^T
+    virtual int formAp(const Vector &p, Vector &Ap) final;
+
+    // add Q diag(fact d) Q^T to A (one term, replacing any previous one; Q full on every rank)
+    int addLowRank(const Matrix &Q, const Vector &d, double fact = 1.0);
+    bool hasLowRank(void) const;
+
+    // OpenSeesMP: rank of this process (-1 serial) and the sum of v over the ranks
+    // (result on every rank). Gather-on-solve systems sum the ranks' B in solve().
+    virtual int getProcessID(void) const;
+    virtual int reduceSum(Vector &v);
 
     virtual const Vector &getX(void) = 0;
     virtual const Vector &getB(void) = 0;
@@ -103,10 +122,27 @@ class LinearSOE : public MovableObject
     const LinearSOESolver *getSolver(void) const;
     
   protected:
+    // the assembled system A_s: derived classes implement these instead of solve/formAp/zeroA
+    virtual int solveAssembled(void);
+    // A_s x = b without disturbing this rank's B (gather systems: b is full on every rank)
+    virtual int solveAssembled(const Vector &b, Vector &x);
+    virtual int formApAssembled(const Vector &p, Vector &Ap);
+    virtual void zeroAAssembled(void) =0;
+
+    // hub-and-spoke sum over the ranks (as ArpackSolver::myMv), for reduceSum overrides
+    static int reduceSumChannels(Vector &v, int processID, int numChannels, Channel **theChannels);
+
     int setSolver(LinearSOESolver &newSolver);	        
     AnalysisModel* theModel;
     
   private:
+    int buildLowRankBasis(void);
+    void clearLowRank(void);
+
+    // low-rank term Q D Q^T and its Woodbury basis Z = A_s^{-1} Q, G = D^{-1} + Q^T Z
+    struct LowRank;
+    LowRank *theLowRank;
+
     LinearSOESolver *theSolver;    
 };
 

@@ -451,7 +451,7 @@ BandGenLinSOE::setB(const Vector &v, double fact)
 
 
 void 
-BandGenLinSOE::zeroA(void)
+BandGenLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     int theSize = Asize;

@@ -658,7 +658,7 @@ MPIDiagonalSOE::setB(const Vector &v, double fact)
 }
 
 void 
-MPIDiagonalSOE::zeroA(void)
+MPIDiagonalSOE::zeroAAssembled(void)
 {
   // NEED TO COMMENT OUT THE IF
   // if want to update A

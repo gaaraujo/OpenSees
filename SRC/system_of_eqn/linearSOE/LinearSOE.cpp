@@ -35,15 +35,24 @@
 #include<Matrix.h>
 #include<Vector.h>
 #include<ID.h>
+#include<Channel.h>
+
+struct LinearSOE::LowRank
+{
+  Matrix Q, Z, G;
+  Vector d, w1, w2;
+  bool active = false;
+  bool basisValid = false;
+};
 
 LinearSOE::LinearSOE(LinearSOESolver &theLinearSOESolver, int classtag)
-    :MovableObject(classtag), theModel(0), theSolver(&theLinearSOESolver)
+    :MovableObject(classtag), theModel(0), theLowRank(0), theSolver(&theLinearSOESolver)
 {
 
 }
 
 LinearSOE::LinearSOE(int classtag)
-:MovableObject(classtag), theModel(0), theSolver(0)
+:MovableObject(classtag), theModel(0), theLowRank(0), theSolver(0)
 {
 
 }
@@ -53,21 +62,211 @@ LinearSOE::~LinearSOE()
 {
   if (theSolver != 0)
     delete theSolver;
+  if (theLowRank != 0)
+    delete theLowRank;
 }
 
-int 
-LinearSOE::solve(void)
+int
+LinearSOE::solveAssembled(void)
 {
   if (theSolver != 0)
     return (theSolver->solve());
-  else 
+  else
     return -1;
+}
+
+int
+LinearSOE::solveAssembled(const Vector &b, Vector &x)
+{
+  // keep this rank's RHS (e.g. the unbalance, formed before the tangent)
+  Vector bSave(this->getB(true));
+  // gather-on-solve systems sum the ranks' RHS: b is full on every rank, so only rank 0 sets it
+  int res = 0;
+  if (this->getProcessID() > 0)
+    this->zeroB();
+  else
+    res = this->setB(b);
+  if (res >= 0)
+    res = this->solveAssembled();
+  if (res >= 0)
+    x = this->getX();
+  if (this->setB(bSave, true) < 0 && res >= 0)
+    res = -2;
+  return res;
+}
+
+int
+LinearSOE::formApAssembled(const Vector &p, Vector &Ap)
+{
+  return -1;
+}
+
+int
+LinearSOE::solve(void)
+{
+  if (theLowRank == 0 || !theLowRank->active)
+    return this->solveAssembled();
+
+  if (!theLowRank->basisValid && this->buildLowRankBasis() < 0)
+    return -3;
+
+  int res = this->solveAssembled();
+  if (res < 0)
+    return res;
+
+  // x = x_s - Z G^{-1} Q^T x_s  (Q, Z, G and x_s are full on every rank)
+  LowRank &lr = *theLowRank;
+  Vector x(this->getX());
+  if (lr.w1.addMatrixTransposeVector(0.0, lr.Q, x, 1.0) < 0 ||
+      lr.G.Solve(lr.w1, lr.w2) < 0 ||
+      x.addMatrixVector(1.0, lr.Z, lr.w2, -1.0) < 0)
+    return -4;
+  this->setX(x);
+  return res;
 }
 
 int
 LinearSOE::formAp(const Vector &p, Vector &Ap)
 {
+  int res = this->formApAssembled(p, Ap);
+  if (res < 0 || theLowRank == 0 || !theLowRank->active)
+    return res;
+
+  // Ap += Q D Q^T p
+  LowRank &lr = *theLowRank;
+  if (lr.w1.addMatrixTransposeVector(0.0, lr.Q, p, 1.0) < 0)
+    return -1;
+  for (int i = 0; i < lr.w1.Size(); ++i)
+    lr.w1(i) *= lr.d(i);
+  return Ap.addMatrixVector(1.0, lr.Q, lr.w1, 1.0);
+}
+
+void
+LinearSOE::zeroA(void)
+{
+  this->clearLowRank();
+  this->zeroAAssembled();
+}
+
+int
+LinearSOE::addLowRank(const Matrix &Q, const Vector &d, double fact)
+{
+  const int n = this->getNumEqn();
+  const int J = Q.noCols();
+  if (Q.noRows() != n || d.Size() != J) {
+    opserr << "WARNING LinearSOE::addLowRank() - Q is " << Q.noRows() << " x " << J
+           << ", d has size " << d.Size() << ", system has " << n << " equations\n";
+    return -1;
+  }
+  if (J == 0 || fact == 0.0) {
+    this->clearLowRank();
+    return 0;
+  }
+  for (int i = 0; i < J; ++i)
+    if (d(i) == 0.0) {
+      opserr << "WARNING LinearSOE::addLowRank() - zero entry in d\n";
+      return -1;
+    }
+
+  if (theLowRank == 0)
+    theLowRank = new LowRank();
+  LowRank &lr = *theLowRank;
+  if (lr.Q.noRows() != n || lr.Q.noCols() != J) {
+    lr.Q.resize(n, J);
+    lr.Z.resize(n, J);
+    lr.G.resize(J, J);
+    lr.d.resize(J);
+    lr.w1.resize(J);
+    lr.w2.resize(J);
+  }
+  lr.Q = Q;
+  lr.d.addVector(0.0, d, fact);
+  lr.active = true;
+  lr.basisValid = false;
+  return 0;
+}
+
+bool
+LinearSOE::hasLowRank(void) const
+{
+  return theLowRank != 0 && theLowRank->active;
+}
+
+void
+LinearSOE::clearLowRank(void)
+{
+  if (theLowRank != 0) {
+    theLowRank->active = false;
+    theLowRank->basisValid = false;
+  }
+}
+
+int
+LinearSOE::buildLowRankBasis(void)
+{
+  LowRank &lr = *theLowRank;
+  const int n = this->getNumEqn();
+  const int J = lr.Q.noCols();
+  if (lr.Q.noRows() != n) {
+    opserr << "WARNING LinearSOE::solve() - system size changed after addLowRank()\n";
+    return -1;
+  }
+
+  // Z = A_s^{-1} Q, one column at a time (the first solve factors A_s)
+  Vector q(n), z(n);
+  for (int j = 0; j < J; ++j) {
+    for (int i = 0; i < n; ++i)
+      q(i) = lr.Q(i, j);
+    if (this->solveAssembled(q, z) < 0)
+      return -2;
+    for (int i = 0; i < n; ++i)
+      lr.Z(i, j) = z(i);
+  }
+
+  // G = D^{-1} + Q^T Z
+  if (lr.G.addMatrixTransposeProduct(0.0, lr.Q, lr.Z, 1.0) < 0)
+    return -3;
+  for (int i = 0; i < J; ++i)
+    lr.G(i, i) += 1.0 / lr.d(i);
+
+  lr.basisValid = true;
+  return 0;
+}
+
+int
+LinearSOE::getProcessID(void) const
+{
   return -1;
+}
+
+int
+LinearSOE::reduceSum(Vector &v)
+{
+  (void)v;
+  return 0;
+}
+
+int
+LinearSOE::reduceSumChannels(Vector &v, int processID, int numChannels, Channel **theChannels)
+{
+  if (processID < 0 || numChannels <= 0 || theChannels == 0 || v.Size() == 0)
+    return 0;
+
+  if (processID != 0) {
+    if (theChannels[0]->sendVector(0, 0, v) < 0 || theChannels[0]->recvVector(0, 0, v) < 0)
+      return -1;
+  } else {
+    Vector other(v.Size());
+    for (int i = 0; i < numChannels; i++) {
+      if (theChannels[i]->recvVector(0, 0, other) < 0)
+        return -1;
+      v += other;
+    }
+    for (int i = 0; i < numChannels; i++)
+      if (theChannels[i]->sendVector(0, 0, v) < 0)
+        return -1;
+  }
+  return 0;
 }
 
 const Vector &

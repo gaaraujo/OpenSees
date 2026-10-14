@@ -83,7 +83,7 @@ class ExplicitAlphaMultiSOE : public TransientIntegrator
     /** Solve \a soe for RHS \a b into \a x; \c nullptr \a soe or failure returns negative.
      *  When \c processID > 0 (worker on a gather-add SOE), workers zero B and P0 sets the global RHS. */
     int linearSolve(LinearSOE *soe, const Vector &b, Vector &x) const;
-    /** Install a global RHS for a subsequent gather-add \c solve (Woodbury/Arpack pattern). */
+    /** Install a global RHS for a subsequent gather-add \c solve (as ArpackSOE). */
     int setGlobalRhs(LinearSOE *soe, const Vector &b) const;
     /** \c soe->formAp(in, out); returns -1 if \a soe is null; otherwise returns \c formAp's result. */
     int applyOperator(LinearSOE *soe, const Vector &in, Vector &out) const;

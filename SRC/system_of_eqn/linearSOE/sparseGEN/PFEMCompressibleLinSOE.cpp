@@ -192,7 +192,7 @@ PFEMCompressibleLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     
 void 
-PFEMCompressibleLinSOE::zeroA(void)
+PFEMCompressibleLinSOE::zeroAAssembled(void)
 {
     for(int i=0; i<M->nzmax; i++)
 	M->x[i] = 0.0;

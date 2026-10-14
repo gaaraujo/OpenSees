@@ -23,11 +23,20 @@
 //
 // Description: This class implements modal damping. It provides methods
 // to add the effects of modal damping to the RHS and the tangent matrix.
+//
+// C = (M Phi) diag(2 xi_i omega_i) (M Phi)^T. The force C v enters the RHS for
+// every option; the coefficient matrix receives c_C C as
+//   quick   : nothing,
+//   legacy  : dense columns (addColA),
+//   woodbury: the low-rank term of the LinearSOE (addLowRank).
+// OpenSeesMP: each rank holds M Phi for its own nodes and elements, so the
+// columns are summed over the ranks (as ArpackSolver::myMv). The force and the
+// dense columns are then full on every rank and, because gather-on-solve systems
+// sum the ranks' contributions, only rank 0 adds them.
 
 #include <ModalDamping.h>
 #include <IncrementalIntegrator.h>
 #include <AnalysisModel.h>
-#include <DirectIntegrationAnalysis.h>
 #include <Domain.h>
 #include <DOF_Group.h>
 #include <DOF_GrpIter.h>
@@ -41,14 +50,13 @@
 #include <cmath>
 #include <cstring>
 #include <string.h>
-#include <WoodburySOE.h>
-#include <classTags.h>
 
 ModalDamping::ModalDamping(IncrementalIntegrator &owner)
     : theIntegrator(&owner),
       eigenVectors(nullptr),
       eigenValues(nullptr),
-      dampingForces(nullptr)
+      dampingForces(nullptr),
+      numDOFModal(0)
 {
 }
 
@@ -82,7 +90,8 @@ ModalDamping::setupModal(const Vector *factors)
 
   const int numDOF = theSOE->getNumEqn();
 
-  if (eigenValues != nullptr && *eigenValues == eigenvalues)
+  // M Phi depends on the eigenpairs and the equation numbering only
+  if (eigenValues != nullptr && *eigenValues == eigenvalues && numDOF == numDOFModal)
     return 0;
 
   if (eigenValues != nullptr)
@@ -91,8 +100,9 @@ ModalDamping::setupModal(const Vector *factors)
     delete[] eigenVectors;
   if (dampingForces != nullptr)
     delete dampingForces;
+  eigenValues = nullptr;
+  numDOFModal = 0;
 
-  eigenValues = new Vector(eigenvalues);
   dampingForces = new Vector(numDOF);
   eigenVectors = new double[static_cast<size_t>(numDOF) * static_cast<size_t>(numModes)];
   for (int i = 0; i < numDOF * numModes; ++i)
@@ -114,25 +124,25 @@ ModalDamping::setupModal(const Vector *factors)
 
   double *eigenVectors2 = new double[static_cast<size_t>(numDOF) * static_cast<size_t>(numModes)];
 
-  WoodburySOE *wb = nullptr;
-  if (theSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
-    wb = static_cast<WoodburySOE *>(theSOE);
-
   for (int i = 0; i < numModes; i++) {
     double *eigenVectorI = &eigenVectors[numDOF * i];
     double *mEigenVectorI = &eigenVectors2[numDOF * i];
     Vector v1(eigenVectorI, numDOF);
     Vector v2(mEigenVectorI, numDOF);
     theIntegrator->doMv(v1, v2);
-    // Partitioned OpenSeesMP: merge local M*phi like ArpackSolver::myMv
-    if (wb != nullptr && wb->reduceSumVector(v2) < 0) {
+    // OpenSeesMP: sum this rank's M phi over the ranks
+    if (theSOE->reduceSum(v2) < 0) {
       delete[] eigenVectors2;
+      delete[] eigenVectors;
+      eigenVectors = nullptr;
       return -1;
     }
   }
 
   delete[] eigenVectors;
   eigenVectors = eigenVectors2;
+  eigenValues = new Vector(eigenvalues);
+  numDOFModal = numDOF;
 
   return 0;
 }
@@ -191,13 +201,9 @@ ModalDamping::addToUnbalance(const Vector *factors)
     }
   }
 
-  // OpenSeesMP: when Woodbury holds a gather-on-solve SOE with full modal force
-  // on every rank, only P0 installs it (same rule as Arpack RHS).
-  if (theSOE->getClassTag() == LinSOE_TAGS_WoodburySOE) {
-    WoodburySOE *wb = static_cast<WoodburySOE *>(theSOE);
-    if (wb->getProcessID() > 0)
-      return 0;
-  }
+  // the force is full on every rank: rank 0 adds it to the gathered RHS
+  if (theSOE->getProcessID() > 0)
+    return 0;
 
   return theSOE->setB(*dampingForces);
 }
@@ -228,15 +234,34 @@ ModalDamping::addToTangent(const Vector *factors, double cFactor)
   if (factors == nullptr || theIntegrator == nullptr)
     return 0;
 
-  if (cFactor == 0.0)
-    return 0;
-
+  AnalysisModel *theAnalysisModel = theIntegrator->getAnalysisModel();
   LinearSOE *theSOE = theIntegrator->getLinearSOE();
-  if (theSOE == nullptr)
+  if (theAnalysisModel == nullptr || theSOE == nullptr)
     return -1;
+
+  const ModalDampingOption option = theAnalysisModel->getModalDampingOption();
+  if (option == MODAL_DAMPING_QUICK || cFactor == 0.0)
+    return 0;
 
   if (setupModal(factors) < 0)
     return -1;
+
+  if (option == MODAL_DAMPING_WOODBURY) {
+    Matrix Q;
+    Vector diagD;
+    const int activeCol = countActiveModes(factors);
+    if (activeCol <= 0)
+      return 0;
+    Q.resize(theSOE->getNumEqn(), activeCol);
+    diagD.resize(activeCol);
+    if (buildSymmetricLowRank(factors, cFactor, Q, diagD) < 0)
+      return -2;
+    return theSOE->addLowRank(Q, diagD);
+  }
+
+  // legacy: dense columns, full on every rank
+  if (theSOE->getProcessID() > 0)
+    return 0;
 
   const int numDOF = theSOE->getNumEqn();
   int numModes = factors->Size();
@@ -277,67 +302,23 @@ ModalDamping::addToTangent(const Vector *factors, double cFactor)
 }
 
 int
-ModalDamping::prepareWoodburyLowRank(const Vector *factors, double cFactor,
-                                     int numDOF, Matrix &Q, Vector &diagD)
-{
-  if (factors == nullptr || theIntegrator == nullptr)
-    return 0;
-
-  if (cFactor == 0.0)
-    return 0;
-
-  if (setupModal(factors) < 0)
-    return -1;
-
-  const int activeCol = countActiveModes(factors);
-  if (activeCol <= 0 || numDOF <= 0)
-    return 0;
-
-  if (Q.noRows() != numDOF || Q.noCols() != activeCol)
-    Q.resize(numDOF, activeCol);
-  if (diagD.Size() != activeCol)
-    diagD.resize(activeCol);
-
-  return buildSymmetricLowRank(factors, cFactor, Q, diagD);
-}
-
-int
 ModalDamping::buildSymmetricLowRank(const Vector *factors, double cFactor,
                                     Matrix &Q, Vector &diagD)
 {
-  if (factors == nullptr || theIntegrator == nullptr)
-    return 0;
-
-  if (cFactor == 0.0)
-    return 0;
-
-  LinearSOE *theSOE = theIntegrator->getLinearSOE();
-  if (theSOE == nullptr)
-    return -1;
-
-  const int numDOF = theSOE->getNumEqn();
-  if (numDOF <= 0)
-    return 0;
-
-  if (setupModal(factors) < 0)
-    return -1;
-
+  const int numDOF = numDOFModal;
   const int numEigenModes = factors->Size();
   int maxModes = numEigenModes;
   if (maxModes > eigenValues->Size())
     maxModes = eigenValues->Size();
 
   const int activeCol = countActiveModes(factors);
-  if (activeCol <= 0)
-    return 0;
-
   if (Q.noRows() != numDOF || Q.noCols() != activeCol || diagD.Size() != activeCol) {
     opserr << "WARNING ModalDamping::buildSymmetricLowRank() - Q/diagD size mismatch\n";
     return -3;
   }
 
   int col = 0;
-  for (int i = 0; i < numEigenModes; ++i) {
+  for (int i = 0; i < maxModes; ++i) {
     const double eigenvalue = (*eigenValues)(i);
     const double xi = (*factors)(i);
     if (eigenvalue <= 0.0 || xi == 0.0)
@@ -427,15 +408,6 @@ OPS_modalDampingImpl(ModalDampingOption defaultOption, bool allowFlag)
   }
 
   theDomain->setModalDampingFactors(&modalDampingValues, option);
-
-  DirectIntegrationAnalysis **transPtr = OPS_GetTransientAnalysis();
-  LinearSOE **soePtr = OPS_GetSOE();
-  if (transPtr != 0 && *transPtr != 0 && soePtr != 0 && *soePtr != 0) {
-    if ((*transPtr)->setLinearSOE(**soePtr) < 0) {
-      opserr << "WARNING modalDamping - failed to refresh Woodbury analysis links\n";
-      return -1;
-    }
-  }
 
   return 0;
 }

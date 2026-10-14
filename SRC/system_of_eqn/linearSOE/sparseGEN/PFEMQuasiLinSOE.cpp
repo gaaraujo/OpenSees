@@ -176,7 +176,7 @@ PFEMQuasiLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     
 void 
-PFEMQuasiLinSOE::zeroA(void)
+PFEMQuasiLinSOE::zeroAAssembled(void)
 {
     for(int i=0; i<M->nzmax; i++)
 	M->x[i] = 0.0;

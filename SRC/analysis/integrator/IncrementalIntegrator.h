@@ -55,7 +55,6 @@ class Vector;
 #define HALL_TANGENT 6
 
 class ModalDamping;
-class WoodburySOE;
 
 class IncrementalIntegrator : public Integrator
 {
@@ -96,7 +95,6 @@ class IncrementalIntegrator : public Integrator
     int setupModal(const Vector *modalDampingValues);
     int addModalDampingForce(const Vector *modalDampingValues);
     int addModalDampingMatrix(const Vector *modalDampingValues);
-    int addModalDampingWoodbury(const Vector *modalFactors);
     ModalDamping *getModalDamping(void);
     virtual double getCFactor(void);
     

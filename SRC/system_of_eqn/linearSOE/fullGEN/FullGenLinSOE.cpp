@@ -370,7 +370,7 @@ FullGenLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-FullGenLinSOE::zeroA(void)
+FullGenLinSOE::zeroAAssembled(void)
 {
     double *Aptr = A;
     int theSize = size*size;
@@ -389,7 +389,7 @@ FullGenLinSOE::zeroB(void)
 }
 
 int
-FullGenLinSOE::formAp(const Vector &p, Vector &Ap)
+FullGenLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
   // Check that p and A are same size
   if (size != p.Size() || size != Ap.Size() || p.Size() != Ap.Size()) {

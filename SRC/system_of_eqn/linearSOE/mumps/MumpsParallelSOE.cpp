@@ -313,7 +313,7 @@ MumpsParallelSOE::setSize(Graph &theGraph)
 
 
 int 
-MumpsParallelSOE::solve(void)
+MumpsParallelSOE::solveAssembled(void)
 {
   int resSolver = 0;
 
@@ -327,7 +327,7 @@ MumpsParallelSOE::solve(void)
     Channel *theChannel = theChannels[0];
     theChannel->sendVector(0, 0, *myVectB);
 
-    resSolver =  this->LinearSOE::solve();
+    resSolver =  this->LinearSOE::solveAssembled();
 
     if (resSolver == 0) {
       // receive X,B and result
@@ -355,7 +355,7 @@ MumpsParallelSOE::solve(void)
     }
 
     // solve
-    resSolver = this->LinearSOE::solve();
+    resSolver = this->LinearSOE::solveAssembled();
 
     // send results back
     if (resSolver == 0) {
@@ -661,7 +661,7 @@ MumpsParallelSOE::setChannels(int nChannels, Channel **theC)
 
 
 int
-MumpsParallelSOE::formAp(const Vector &p, Vector &Ap)
+MumpsParallelSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
   if (size != p.Size() || size != Ap.Size()) {
     opserr << "WARNING MumpsParallelSOE::formAp() - vectors must match global size "

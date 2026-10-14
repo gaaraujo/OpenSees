@@ -110,9 +110,9 @@ PFEMLinSOE::~PFEMLinSOE()
 }
 
 int
-PFEMLinSOE::solve(void)
+PFEMLinSOE::solveAssembled(void)
 {
-    int res = LinearSOE::solve();
+    int res = LinearSOE::solveAssembled();
     if (res < 0) {
         return res;
     }
@@ -369,7 +369,7 @@ PFEMLinSOE::setB(const Vector &v, double fact)
 }
 
 void 
-PFEMLinSOE::zeroA(void)
+PFEMLinSOE::zeroAAssembled(void)
 {
     for (int i = 0; i < M->nzmax; i++)
         M->x[i] = 0.0;

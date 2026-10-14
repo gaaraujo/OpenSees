@@ -497,7 +497,7 @@ DistributedSparseGenColLinSOE::zeroB(void)
 }
 
 int 
-DistributedSparseGenColLinSOE::solve(void)
+DistributedSparseGenColLinSOE::solveAssembled(void)
 {
   static ID result(1);
 
@@ -519,7 +519,7 @@ DistributedSparseGenColLinSOE::solve(void)
 
     LinearSOESolver *theSoeSolver = this->getSolver();
     if (theSoeSolver->getClassTag() == SOLVER_TAGS_DistributedSuperLU)
-      this->LinearSOE::solve();
+      this->LinearSOE::solveAssembled();
 
     // receive X,B and result
     theChannel->recvVector(0, 0, *vectX);
@@ -570,7 +570,7 @@ DistributedSparseGenColLinSOE::solve(void)
 
 
     // solve
-    result(0) = this->LinearSOE::solve();
+    result(0) = this->LinearSOE::solveAssembled();
 
     // send results back
     for (int j=0; j<numChannels; j++) {

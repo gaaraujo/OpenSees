@@ -148,7 +148,7 @@ PFEMGeneralLinSOE::recvSelf(int cTag, Channel &theChannel,
 }
 
 void
-PFEMGeneralLinSOE::zeroA()
+PFEMGeneralLinSOE::zeroAAssembled()
 {
     for(int i=0; i<(int)A.size(); i++) {
 	A[i] = 0.0;

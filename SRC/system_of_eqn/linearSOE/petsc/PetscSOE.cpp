@@ -821,7 +821,7 @@ PetscSOE::setB(const Vector &v, double fact)
 
 
 void
-PetscSOE::zeroA(void)
+PetscSOE::zeroAAssembled(void)
 {
   isFactored = 0;
   if ( processID >= 0 )

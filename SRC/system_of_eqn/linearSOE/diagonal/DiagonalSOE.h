@@ -53,10 +53,10 @@ class DiagonalSOE : public LinearSOE
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);        
     
-    void zeroA(void);
+    void zeroAAssembled(void);
     void zeroB(void);
 
-    int formAp(const Vector &p, Vector &Ap);
+    int formApAssembled(const Vector &p, Vector &Ap);
     
     void setX(int loc, double value);
     void setX(const Vector &x);

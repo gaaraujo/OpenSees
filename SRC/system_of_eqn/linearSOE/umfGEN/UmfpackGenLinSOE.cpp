@@ -280,7 +280,7 @@ UmfpackGenLinSOE::setB(const Vector &v, double fact)
 }
 
 void
-UmfpackGenLinSOE::zeroA(void)
+UmfpackGenLinSOE::zeroAAssembled(void)
 {
     Ax.assign(Ax.size(),0.0);
     factored = false;
@@ -293,7 +293,7 @@ UmfpackGenLinSOE::zeroB(void)
 }
 
 int
-UmfpackGenLinSOE::formAp(const Vector &p, Vector &Ap)
+UmfpackGenLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
     const int n = X.Size();
     if (n != p.Size() || n != Ap.Size()) {

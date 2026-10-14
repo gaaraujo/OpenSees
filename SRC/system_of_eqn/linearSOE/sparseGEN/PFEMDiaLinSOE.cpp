@@ -190,7 +190,7 @@ PFEMDiaLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     
 void 
-PFEMDiaLinSOE::zeroA(void)
+PFEMDiaLinSOE::zeroAAssembled(void)
 {
     for(int i=0; i<Gt->nzmax; i++)
 	Gt->x[i] = 0.0;

@@ -41,7 +41,6 @@
 #include <EquiSolnAlgo.h>
 #include <AnalysisModel.h>
 #include <LinearSOE.h>
-#include <WoodburySOE.h>
 #include <EigenSOE.h>
 #include <DOF_Numberer.h>
 #include <ConstraintHandler.h>
@@ -56,52 +55,9 @@
 #include <Matrix.h>
 #include <ID.h>
 #include <Graph.h>
-#include <classTags.h>
 
 // Constructor
 //    sets theModel and theSysOFEqn to 0 and the Algorithm to the one supplied
-
-void
-DirectIntegrationAnalysis::applyWoodburyWrapIfNeeded(LinearSOE &nativeSOE)
-{
-  theNativeSOE = &nativeSOE;
-
-  Domain *the_Domain = this->getDomainPtr();
-  if (the_Domain != 0 &&
-      the_Domain->getModalDampingOption() == MODAL_DAMPING_WOODBURY) {
-    if (theWoodburyWrap == 0)
-      theWoodburyWrap = new WoodburySOE(nativeSOE);
-    else if (&theWoodburyWrap->getInnerSOE() != &nativeSOE) {
-      delete theWoodburyWrap;
-      theWoodburyWrap = new WoodburySOE(nativeSOE);
-    }
-    theSOE = theWoodburyWrap;
-  } else {
-    if (theWoodburyWrap != 0) {
-      delete theWoodburyWrap;
-      theWoodburyWrap = 0;
-    }
-    theSOE = &nativeSOE;
-  }
-}
-
-void
-DirectIntegrationAnalysis::relinkAnalysisObjects(void)
-{
-  if (theSOE == 0 || theAnalysisModel == 0 ||
-      theIntegrator == 0 || theAlgorithm == 0)
-    return;
-
-  theIntegrator->setLinks(*theAnalysisModel, *theSOE, theTest);
-  theAlgorithm->setLinks(*theAnalysisModel, *theIntegrator, *theSOE, theTest);
-  theSOE->setLinks(*theAnalysisModel);
-
-  if (theEigenSOE != 0) {
-    LinearSOE *eigenLinSOE = theNativeSOE != 0 ? theNativeSOE : theSOE;
-    if (eigenLinSOE != 0)
-      theEigenSOE->setLinearSOE(*eigenLinSOE);
-  }
-}
 
 DirectIntegrationAnalysis::DirectIntegrationAnalysis(Domain &the_Domain,
 						     ConstraintHandler &theHandler,
@@ -118,9 +74,7 @@ DirectIntegrationAnalysis::DirectIntegrationAnalysis(Domain &the_Domain,
  theDOF_Numberer(&theNumberer), 
  theAnalysisModel(&theModel), 
  theAlgorithm(&theSolnAlgo), 
- theSOE(0),
- theNativeSOE(0),
- theWoodburyWrap(0),
+ theSOE(&theLinSOE), 
  theEigenSOE(0),
  theIntegrator(&theTransientIntegrator), 
  theTest(theConvergenceTest),
@@ -128,14 +82,14 @@ DirectIntegrationAnalysis::DirectIntegrationAnalysis(Domain &the_Domain,
  numSubLevels(num_SubLevels),
  numSubSteps(num_SubSteps)
 {
-  applyWoodburyWrapIfNeeded(theLinSOE);
-
   // first we set up the links needed by the elements in the 
   // aggregation
   theAnalysisModel->setLinks(the_Domain, theHandler);
   theConstraintHandler->setLinks(the_Domain, theModel, theTransientIntegrator);
   theDOF_Numberer->setLinks(theModel);
-  relinkAnalysisObjects();
+  theIntegrator->setLinks(theModel, theLinSOE, theTest);
+  theAlgorithm->setLinks(theModel, theTransientIntegrator, theLinSOE, theTest);
+  theSOE->setLinks(theModel);
 
   if (theTest != 0)
     theAlgorithm->setConvergenceTest(theTest);
@@ -149,8 +103,6 @@ DirectIntegrationAnalysis::~DirectIntegrationAnalysis()
   // we don't invoke the destructors in case user switching
   // from a static to a direct integration analysis 
   // clearAll() must be invoked if user wishes to invoke destructor
-  delete theWoodburyWrap;
-  theWoodburyWrap = 0;
 }    
 
 void
@@ -167,12 +119,8 @@ DirectIntegrationAnalysis::clearAll(void)
     delete theIntegrator;
   if (theAlgorithm != 0)  
     delete theAlgorithm;
-  if (theWoodburyWrap != 0) {
-    delete theWoodburyWrap;
-    theWoodburyWrap = 0;
-  }
-  if (theNativeSOE != 0)
-    delete theNativeSOE;
+  if (theSOE != 0)
+    delete theSOE;
   if (theEigenSOE != 0)
     delete theEigenSOE;
   if (theTest != 0)
@@ -185,7 +133,6 @@ DirectIntegrationAnalysis::clearAll(void)
     theIntegrator =0;
     theAlgorithm =0;
     theSOE =0;
-    theNativeSOE =0;
     theEigenSOE =0;
     theTest =0;
 }    
@@ -521,7 +468,7 @@ DirectIntegrationAnalysis::setAlgorithm(EquiSolnAlgo &theNewAlgorithm)
   theAlgorithm = &theNewAlgorithm;
 
   if (theAnalysisModel != 0 && theIntegrator != 0 && theSOE != 0)
-    relinkAnalysisObjects();
+    theAlgorithm->setLinks(*theAnalysisModel, *theIntegrator, *theSOE, theTest);
   // invoke domainChanged() either indirectly or directly
   // domainStamp = 0;
   if (domainStamp != 0)
@@ -541,8 +488,9 @@ DirectIntegrationAnalysis::setIntegrator(TransientIntegrator &theNewIntegrator)
   // set the links needed by the other objects in the aggregation
   Domain *the_Domain = this->getDomainPtr();
   theIntegrator = &theNewIntegrator;
+  theIntegrator->setLinks(*theAnalysisModel, *theSOE, theTest);
   theConstraintHandler->setLinks(*the_Domain, *theAnalysisModel, *theIntegrator);
-  relinkAnalysisObjects();
+  theAlgorithm->setLinks(*theAnalysisModel, *theIntegrator, *theSOE, theTest);
 
   // cause domainChanged to be invoked on next analyze
   //  domainStamp = 0;
@@ -554,33 +502,22 @@ DirectIntegrationAnalysis::setIntegrator(TransientIntegrator &theNewIntegrator)
 int 
 DirectIntegrationAnalysis::setLinearSOE(LinearSOE &theNewSOE)
 {
-  if (theNativeSOE != 0 && theNativeSOE != &theNewSOE) {
-    if (theWoodburyWrap != 0) {
-      delete theWoodburyWrap;
-      theWoodburyWrap = 0;
-    }
-    delete theNativeSOE;
-    theNativeSOE = 0;
-  }
+  // invoke the destructor on the old one
+  if (theSOE != 0)
+    delete theSOE;
 
-  applyWoodburyWrapIfNeeded(theNewSOE);
-  relinkAnalysisObjects();
-
+  // set the links needed by the other objects in the aggregation
+  theSOE = &theNewSOE;
+  theIntegrator->setLinks(*theAnalysisModel,*theSOE, theTest);
+  theAlgorithm->setLinks(*theAnalysisModel, *theIntegrator, *theSOE, theTest);
+  theSOE->setLinks(*theAnalysisModel);
+  
+  if (theEigenSOE != 0) 
+    theEigenSOE->setLinearSOE(*theSOE);
+  
+  // cause domainChanged to be invoked on next analyze
   domainStamp = 0;
-
-  return 0;
-}
-
-int
-DirectIntegrationAnalysis::setWoodburyParallel(int processID, int nChannels,
-                                               Channel **channels)
-{
-  if (theWoodburyWrap == 0)
-    return 0;
-
-  theWoodburyWrap->setProcessID(processID);
-  if (nChannels > 0 && channels != 0)
-    theWoodburyWrap->setChannels(nChannels, channels);
+  
   return 0;
 }
 
@@ -598,9 +535,7 @@ DirectIntegrationAnalysis::setEigenSOE(EigenSOE &theNewSOE)
   if (theEigenSOE == 0) {
     theEigenSOE = &theNewSOE;
     theEigenSOE->setLinks(*theAnalysisModel);
-    LinearSOE *eigenLinSOE = theNativeSOE != 0 ? theNativeSOE : theSOE;
-    if (eigenLinSOE != 0)
-      theEigenSOE->setLinearSOE(*eigenLinSOE);
+    theEigenSOE->setLinearSOE(*theSOE);
 
     /*
     if (domainStamp != 0) {

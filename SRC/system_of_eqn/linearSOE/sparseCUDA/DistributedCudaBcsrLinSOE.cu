@@ -462,7 +462,7 @@ DistributedCudaBcsrLinSOE::setB(const Vector &v, double fact)
 }
 
 void
-DistributedCudaBcsrLinSOE::zeroA(void)
+DistributedCudaBcsrLinSOE::zeroAAssembled(void)
 {
     clearTriplets();
     if (theCudaSOE != nullptr)
@@ -545,12 +545,12 @@ DistributedCudaBcsrLinSOE::setX(const Vector &x)
 }
 
 int
-DistributedCudaBcsrLinSOE::solve(void)
+DistributedCudaBcsrLinSOE::solveAssembled(void)
 {
     static ID result(1);
 
     if (theCudaSOE == nullptr) {
-        opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - no CudaBcsrLinSOE\n";
+        opserr << "WARNING DistributedCudaBcsrLinSOE::solveAssembled() - no CudaBcsrLinSOE\n";
         return -1;
     }
 
@@ -636,7 +636,7 @@ DistributedCudaBcsrLinSOE::solve(void)
             theChannel->recvID(0, 0, nTripID);
             nTrip = nTripID(0);
             if (nTrip < 0) {
-                opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - invalid nTrip\n";
+                opserr << "WARNING DistributedCudaBcsrLinSOE::solveAssembled() - invalid nTrip\n";
                 result(0) = -1;
                 continue;
             }
@@ -645,7 +645,7 @@ DistributedCudaBcsrLinSOE::solve(void)
         if (workerSendsA != sendA) {
             // A rank skipped (or repeated) its assembly: fail on every rank instead of
             // merging a partial matrix. The triplets are still received below.
-            opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - matrix status of rank "
+            opserr << "WARNING DistributedCudaBcsrLinSOE::solveAssembled() - matrix status of rank "
                    << j + 1 << " differs from rank 0\n";
             result(0) = -1;
         }
@@ -686,7 +686,7 @@ DistributedCudaBcsrLinSOE::solve(void)
 }
 
 int
-DistributedCudaBcsrLinSOE::formAp(const Vector &p, Vector &Ap)
+DistributedCudaBcsrLinSOE::formApAssembled(const Vector &p, Vector &Ap)
 {
     if (theCudaSOE == nullptr) {
         opserr << "WARNING DistributedCudaBcsrLinSOE::formAp() - no CudaBcsrLinSOE\n";

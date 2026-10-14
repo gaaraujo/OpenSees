@@ -82,7 +82,6 @@ UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 #include <SymmGeneralizedEigenSolver.h>
 #include <SymmGeneralizedEigenSOE.h>
 #include <ArpackSOE.h>
-#include <WoodburySOE.h>
 #include <LoadControl.h>
 #include <CTestPFEM.h>
 #include <PFEMIntegrator.h>
@@ -470,10 +469,7 @@ OpenSeesCommands::eigen(int typeSolver, double shift,
 #ifdef _PARALLEL_INTERPRETERS
                 // OpenSeesMP / OpenSeesPy: same pattern as MumpsParallelSOE
                 if (theSOE != 0) {
-                    LinearSOE *nativeSOE = theSOE;
-                    if (nativeSOE->getClassTag() == LinSOE_TAGS_WoodburySOE)
-                        nativeSOE = &((WoodburySOE *)nativeSOE)->getInnerSOE();
-                    int soeTag = nativeSOE->getClassTag();
+                    int soeTag = theSOE->getClassTag();
                     if (soeTag == LinSOE_TAGS_MumpsParallelSOE ||
                         soeTag == LinSOE_TAGS_DistributedProfileSPDLinSOE ||
                         soeTag == LinSOE_TAGS_DistributedCudaBcsrLinSOE) {

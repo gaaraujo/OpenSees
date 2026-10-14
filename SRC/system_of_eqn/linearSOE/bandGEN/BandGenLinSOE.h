@@ -61,7 +61,7 @@ class BandGenLinSOE : public LinearSOE
     virtual int addB(const Vector &, const ID &, double fact = 1.0);    
     virtual int setB(const Vector &, double fact = 1.0);        
 
-    virtual void zeroA(void);
+    virtual void zeroAAssembled(void);
     virtual void zeroB(void);
 
     virtual const Vector &getX(void);

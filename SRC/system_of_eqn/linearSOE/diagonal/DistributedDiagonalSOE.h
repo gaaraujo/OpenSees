@@ -55,7 +55,7 @@ class DistributedDiagonalSOE : public LinearSOE
     int addB(const Vector &, const ID &, double fact = 1.0);    
     int setB(const Vector &, double fact = 1.0);        
     
-    void zeroA(void);
+    void zeroAAssembled(void);
     void zeroB(void);
 
     void setX(int loc, double value);
