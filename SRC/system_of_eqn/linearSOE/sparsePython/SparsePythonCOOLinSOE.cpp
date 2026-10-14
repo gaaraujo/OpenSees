@@ -14,17 +14,20 @@
 #include <algorithm>
 #include <cmath>
 
-SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver)
+SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver,
+                                             MatrixType type)
     : LinearSOE(theSolver, LinSOE_TAGS_SparsePythonCOOLinSOE),
-      matrixStatus(MatrixStatus::STRUCTURE_CHANGED)
+      matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
+      theMatrixType(type)
 {
     theSolver.setLinearSOE(*this);
     updateVectorViews();
 }
 
-SparsePythonCOOLinSOE::SparsePythonCOOLinSOE()
+SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(MatrixType type)
     : LinearSOE(LinSOE_TAGS_SparsePythonCOOLinSOE),
-      matrixStatus(MatrixStatus::STRUCTURE_CHANGED)
+      matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
+      theMatrixType(type)
 {
     updateVectorViews();
 }
@@ -66,6 +69,7 @@ SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
 
     std::size_t last = 0;
     rowOffsets[0] = 0;
+    const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
 
     Vertex *theVertex = nullptr;
     for (int row = 0; row < size; ++row) {
@@ -91,7 +95,12 @@ SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
             columns.insert(adjacency(i));
         }
 
+        // Entries are ordered by row, then column (ID::insert keeps columns
+        // sorted), so addA can locate them by binary search.
         for (int i = 0; i < columns.Size(); ++i) {
+            if (lower && columns(i) > row) {
+                continue;
+            }
             rowIndices[last] = row;
             colIndices[last] = columns(i);
             ++last;
@@ -144,52 +153,26 @@ SparsePythonCOOLinSOE::addA(const Matrix &m, const ID &id, double fact)
         return 0;
     }
 
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int row = id(i);
-            if (row < 0 || row >= size) {
-                continue;
-            }
-
-            const int start = rowOffsets[static_cast<std::size_t>(row)];
-            const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                for (int k = start; k < end; ++k) {
-                    if (colIndices[static_cast<std::size_t>(k)] == col) {
-                        values[static_cast<std::size_t>(k)] += m(i, j);
-                        break;
-                    }
-                }
-            }
+    const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
+    auto colBegin = colIndices.begin();
+    for (int i = 0; i < idSize; ++i) {
+        const int row = id(i);
+        if (row < 0 || row >= size) {
+            continue;
         }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int row = id(i);
-            if (row < 0 || row >= size) {
+
+        auto beginIt = colBegin + rowOffsets[static_cast<std::size_t>(row)];
+        auto endIt = colBegin + rowOffsets[static_cast<std::size_t>(row + 1)];
+
+        for (int j = 0; j < idSize; ++j) {
+            const int col = id(j);
+            if (col < 0 || col >= size || (lower && col > row)) {
                 continue;
             }
 
-            const int start = rowOffsets[static_cast<std::size_t>(row)];
-            const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                for (int k = start; k < end; ++k) {
-                    if (colIndices[static_cast<std::size_t>(k)] == col) {
-                        values[static_cast<std::size_t>(k)] += fact * m(i, j);
-                        break;
-                    }
-                }
+            auto it = std::lower_bound(beginIt, endIt, col);
+            if (it != endIt && *it == col) {
+                values[static_cast<std::size_t>(it - colBegin)] += fact * m(i, j);
             }
         }
     }

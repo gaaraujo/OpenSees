@@ -129,6 +129,51 @@ ParseWritableFlags(const char *token, SparsePythonWritableFlags &flags)
     return valid;
 }
 
+bool
+ParseMatrixTypeToken(const char *token, SparsePythonMatrixType &type)
+{
+    if (token == nullptr) {
+        return false;
+    }
+    std::string normalized = ToLower(token);
+    if (normalized == "general") {
+        type = SparsePythonMatrixType::GENERAL;
+        return true;
+    }
+    if (normalized == "symmetric_lower" || normalized == "symmetric") {
+        type = SparsePythonMatrixType::SYMMETRIC_LOWER;
+        return true;
+    }
+    return false;
+}
+
+// Warn about dictionary keys this version does not understand. They used to be
+// ignored silently, so an option meant for a newer OpenSees could change the
+// meaning of the buffers without any message.
+void
+WarnUnknownKeys(PyObject *dict, const char *type)
+{
+    static const char *known[] = {"solver", "scheme", "writable", "matrix_type", "typed"};
+    PyObject *key = nullptr;
+    PyObject *value = nullptr;
+    Py_ssize_t pos = 0;
+    while (PyDict_Next(dict, &pos, &key, &value)) {
+        const char *name = PyUnicode_Check(key) ? PyUnicode_AsUTF8(key) : nullptr;
+        bool found = false;
+        for (const char *k : known) {
+            if (name != nullptr && strcmp(name, k) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            opserr << "WARNING: system " << type << " - ignoring unknown key '"
+                   << (name != nullptr ? name : "?") << "'" << endln;
+        }
+    }
+    PyErr_Clear();
+}
+
 PyObject *
 EnsureCallable(PyObject *solverObject, const char *solveMethod)
 {
@@ -153,7 +198,9 @@ EnsureCallable(PyObject *solverObject, const char *solveMethod)
 
 void *
 CreateCompressedSOE(PyObject *solverObject, SparsePythonStorageScheme scheme,
-                    const SparsePythonWritableFlags &writableFlags)
+                    const SparsePythonWritableFlags &writableFlags,
+                    SparsePythonMatrixType theMatrixType,
+                    const SparsePythonCallOptions &callOptions)
 {
     if (scheme == SparsePythonStorageScheme::COO) {
         opserr << "WARNING: system PythonSparse - COO scheme is not compatible with compressed storage" << endln;
@@ -173,13 +220,15 @@ CreateCompressedSOE(PyObject *solverObject, SparsePythonStorageScheme scheme,
     auto *solver = new SparsePythonCompressedLinSolver();
     solver->setPythonCallable(solverObject, "solve");
     solver->setWritableFlags(writableFlags);
+    solver->setCallOptions(callOptions);
 
-    auto *soe = new SparsePythonCompressedLinSOE(*solver, scheme);
+    auto *soe = new SparsePythonCompressedLinSOE(*solver, scheme, theMatrixType);
     return soe;
 }
 
 void *
-CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFlags)
+CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFlags,
+             SparsePythonMatrixType theMatrixType, const SparsePythonCallOptions &callOptions)
 {
     PyObject *callable = EnsureCallable(solverObject, "solve");
     if (callable == nullptr) {
@@ -194,8 +243,9 @@ CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFl
     auto *solver = new SparsePythonCOOLinSolver();
     solver->setPythonCallable(solverObject, "solve");
     solver->setWritableFlags(writableFlags);
+    solver->setCallOptions(callOptions);
 
-    auto *soe = new SparsePythonCOOLinSOE(*solver);
+    auto *soe = new SparsePythonCOOLinSOE(*solver, theMatrixType);
     return soe;
 }
 
@@ -204,7 +254,7 @@ CreateCOOSOE(PyObject *solverObject, const SparsePythonWritableFlags &writableFl
 void *
 OPS_SparsePythonSolver()
 {
-    const char *expectedSyntax = "system 'PythonSparse' {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', 'writable': 'values'|'rhs'|'values,rhs'|'all'|'none'}";
+    const char *expectedSyntax = "system 'PythonSparse' {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', 'writable': 'values'|'rhs'|'values,rhs'|'all'|'none', 'matrix_type': 'GENERAL'|'SYMMETRIC_LOWER', 'typed': False|True}";
 
     OPS_ResetCurrentInputArg(-1);
 
@@ -345,11 +395,46 @@ OPS_SparsePythonSolver()
         }
     }
 
+    // Extract 'matrix_type' (optional, defaults to GENERAL). SYMMETRIC_LOWER
+    // stores only row >= column and passes matrix_type to solve().
+    SparsePythonMatrixType theMatrixType = SparsePythonMatrixType::GENERAL;
+    SparsePythonCallOptions callOptions;
+    PyObject *matrixTypeObj = PyDict_GetItemString(dict, "matrix_type");
+    if (matrixTypeObj != nullptr && matrixTypeObj != Py_None) {
+        const char *matrixTypeStr =
+            PyUnicode_Check(matrixTypeObj) ? PyUnicode_AsUTF8(matrixTypeObj) : nullptr;
+        if (matrixTypeStr == nullptr || !ParseMatrixTypeToken(matrixTypeStr, theMatrixType)) {
+            opserr << "WARNING: system " << type << " - unknown matrix_type '"
+                   << (matrixTypeStr != nullptr ? matrixTypeStr : "?")
+                   << "' (expected GENERAL or SYMMETRIC_LOWER)" << endln;
+            PyErr_Clear();
+            PyGILState_Release(gilState);
+            return nullptr;
+        }
+        callOptions.passMatrixType = true;
+    }
+
+    // Extract 'typed' (optional, defaults to False): memoryviews with format
+    // 'i'/'d' instead of raw bytes.
+    PyObject *typedObj = PyDict_GetItemString(dict, "typed");
+    if (typedObj != nullptr) {
+        const int truth = PyObject_IsTrue(typedObj);
+        if (truth < 0) {
+            PyErr_Clear();
+            opserr << "WARNING: system " << type << " - 'typed' must be True or False" << endln;
+            PyGILState_Release(gilState);
+            return nullptr;
+        }
+        callOptions.typedBuffers = (truth == 1);
+    }
+
+    WarnUnknownKeys(dict, type);
+
     void *result = nullptr;
     if (scheme == SparsePythonStorageScheme::COO) {
-        result = CreateCOOSOE(solverObj, writableFlags);
+        result = CreateCOOSOE(solverObj, writableFlags, theMatrixType, callOptions);
     } else {
-        result = CreateCompressedSOE(solverObj, scheme, writableFlags);
+        result = CreateCompressedSOE(solverObj, scheme, writableFlags, theMatrixType, callOptions);
     }
 
     PyGILState_Release(gilState);
