@@ -115,7 +115,6 @@ def package_eigen_solvers() -> list[tuple[str, object]]:
     out = [("pkg scipy.eigsh", lambda: eigsh())]
     if gpu_available():
         from openseespy_solvers import cupy as ocp
-        from openseespy_solvers.cupy import precond as cupy_precond
 
         out.append(("pkg cupy.eigsh (general)", lambda: ocp.eigsh(mass_mode="general")))
     return out
