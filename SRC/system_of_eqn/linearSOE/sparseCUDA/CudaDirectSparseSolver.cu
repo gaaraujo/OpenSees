@@ -693,13 +693,18 @@ bool parseCuDSSConfigFromOPS(CuDSSConfig &config)
  */
 CudaBcsrLinSOE *createCudaBcsrSOEFromCuDSSConfig(const CuDSSConfig &config, bool hostOnly)
 {
+    // Workers must use the same storage as rank 0: with symmetric storage rank 0 keeps only
+    // the lower triangle, so upper-triangle triplets from a full-storage worker have no slot.
+    const bool symmetricStorage =
+        (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
+
     if (hostOnly) {
         CudaBcsrLinSolver *workerSolver = new CudaHostWorkerSolver();
         CudaBcsrLinSOE *soe =
             CudaBcsrLinSOE::createDouble(*workerSolver, /*blockSize=*/1,
                                          /*paddingEnabled=*/false,
                                          config.verbose,
-                                         /*symmetricStorage=*/false);
+                                         symmetricStorage);
         if (soe == nullptr) {
             delete workerSolver;
             opserr << "ERROR: CuDSS - failed to create host-only worker SOE\n";
@@ -737,8 +742,6 @@ CudaBcsrLinSOE *createCudaBcsrSOEFromCuDSSConfig(const CuDSSConfig &config, bool
     const int blockSize = 1;
     const bool paddingEnabled = false;
     const CudaPrecision precision = solver->getPrecision();
-    const bool symmetricStorage =
-        (config.cudssMatTypeStr == "symmetric" || config.cudssMatTypeStr == "spd");
 
     CudaBcsrLinSOE *soe = nullptr;
     switch (precision) {
