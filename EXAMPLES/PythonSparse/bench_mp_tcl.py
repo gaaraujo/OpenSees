@@ -41,6 +41,9 @@ SYSTEMS = {
     "Tcl MP DistributedCuDSS spd": "system DistributedCuDSS -matrixType spd",
     "Tcl MP DistributedCuDSS dFFI": "system DistributedCuDSS -precision dFFI",
     "Tcl MP Mumps": "system Mumps",
+    # larger workspace relaxation (ICNTL(14) = 200%, MUMPS default 20%); default Mumps failed
+    # in a gravity step at 126k on 32 ranks (memory was not the limit)
+    "Tcl MP Mumps ICNTL14": "system Mumps -ICNTL14 200",
     "Tcl MP DistributedAmgX AMG":
         "system DistributedAmgX -solver PCG -preconditioner AMG -maxIters 2000 -relTolerance 1e-8",
 }
