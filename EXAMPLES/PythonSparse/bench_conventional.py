@@ -276,6 +276,10 @@ def _relres(kw):
     return float(np.linalg.norm(b - A @ x) / nb) if nb > 0 else 0.0
 
 
+# Run with one BLAS thread (unless BENCH_KEEP_THREADS is set): on a 16-thread Sherlock job
+# compiled UmfPack timed out at 27k, while with 1 or 4 threads it matched the laptop.
+SINGLE_THREAD_CONFIGS = {"compiled UmfPack"}
+
 TCL_CONFIGS = {"compiled CuDSS (Tcl)": "system CuDSS",
                "compiled CuDSS spd (Tcl)": "system CuDSS -matrixType spd",
                # dFFI: float factorization; -irNSteps adds iterative refinement in double
@@ -540,9 +544,12 @@ def main() -> int:
                                args.motion, "--motion-dt", str(args.motion_dt), "--steps",
                                str(args.steps), "--iter-rtol", str(args.iter_rtol),
                                "--single", material, size, alg, name]
+                        env = None
+                        if name in SINGLE_THREAD_CONFIGS and not os.environ.get("BENCH_KEEP_THREADS"):
+                            env = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
                         try:
                             res = subprocess.run(cmd, capture_output=True, text=True,
-                                                 timeout=args.max_seconds)
+                                                 timeout=args.max_seconds, env=env)
                             line = [ln for ln in res.stdout.splitlines()
                                     if ln.startswith("JSON ")]
                             rec = (json.loads(line[-1][5:]) if line else
