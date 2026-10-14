@@ -14,6 +14,7 @@ per-step times and Newton iterations.
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import platform
@@ -47,14 +48,26 @@ SYSTEMS = {
 
 RESULT_FILE = "result.txt"   # rank 0 writes its RESULT lines here (in the run directory)
 NUMBERER = "ParallelRCM"     # --numberer; ParallelPlain leaves the ordering to the solver
+# --integrator for the transient phase (gravity always uses Newmark + the chosen algorithm).
+# The MKR-alpha integrators are explicit model-based: one state determination per step,
+# algorithm Linear; MKRAlphaExplicitMultiSOE runs on the CPU solver given by the system,
+# CudaMKRAlpha on CuDSS / DistributedCuDSS.
+INTEGRATORS = {"Newmark": (None, None),
+               "MKRAlpha": ("MKRAlphaExplicitMultiSOE 0.5", "Linear"),
+               "CudaMKRAlpha": ("CudaMKRAlpha 0.5", "Linear")}
+INTEGRATOR = "Newmark"
+TRACE = False                # --trace: record the surface corner node's x displacement
 
 
 def script(material, size, alg, system_line, motion, steps):
     refine, plan = SIZES[size]
+    integ, dyn_alg = INTEGRATORS[INTEGRATOR]
     return (bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
             + bs.tcl_analysis(system_line, ALGORITHMS[alg], material, motion=motion,
                               dyn_steps=steps, numberer=NUMBERER, input_defined=True,
-                              rank0_only=True, result_file=RESULT_FILE))
+                              rank0_only=True, result_file=RESULT_FILE,
+                              dyn_integrator=integ, dyn_algorithm=dyn_alg,
+                              trace_node=bs.top_node(refine, plan) if TRACE else None))
 
 
 def parse(text):
@@ -88,9 +101,12 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=200)
     ap.add_argument("--max-seconds", type=float, default=1800.0)
     ap.add_argument("--numberer", default="ParallelRCM", choices=["ParallelRCM", "ParallelPlain"])
+    ap.add_argument("--integrator", default="Newmark", choices=list(INTEGRATORS))
+    ap.add_argument("--trace", action="store_true",
+                    help="record the surface corner node's x displacement every transient step")
     args = ap.parse_args()
-    global NUMBERER
-    NUMBERER = args.numberer
+    global NUMBERER, INTEGRATOR, TRACE
+    NUMBERER, INTEGRATOR, TRACE = args.numberer, args.integrator, args.trace
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
@@ -144,7 +160,12 @@ def main() -> int:
                             subprocess.run(kill, capture_output=True)
                         rec.update({"material": material, "size": size, "np": nproc,
                                     "algorithm": alg, "config": name, "numberer": NUMBERER,
+                                    "integrator": INTEGRATOR,
                                     "wall_seconds": time.perf_counter() - t0})
+                        traces = glob.glob(os.path.join(workdir, "trace_*.txt"))
+                        if traces:
+                            rec["trace_top_ux"] = [float(v) for v in
+                                                   open(traces[0]).read().strip().split(",") if v]
                         out.write(json.dumps(rec) + "\n")
                         out.flush()
                         msg = rec.get("error", "")[:200] if rec["ok"] < -1 else " ".join(

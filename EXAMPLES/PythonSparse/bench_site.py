@@ -113,6 +113,12 @@ def grid(refine: int = 1, plan: int | None = None):
     return xs, ys, zs, layer_of_cell
 
 
+def top_node(refine: int = 1, plan: int | None = None) -> int:
+    """Surface corner node (0, 0, top); with laminar sides it carries the column's motion."""
+    xs, ys, zs, _ = grid(refine, plan)
+    return 1 + len(xs) * len(ys) * (len(zs) - 1)
+
+
 def base_master(refine: int = 1) -> int:
     """Base node carrying the dashpots and the input force (corner node 1)."""
     return 1
@@ -357,37 +363,46 @@ def tcl_input(motion=None) -> str:
 
 def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_steps=50,
                  start_time=None, dyn_dt=DYN_DT, numberer="RCM", input_defined=False,
-                 rank0_only=False, constraints="Transformation", result_file=None):
+                 rank0_only=False, constraints="Transformation", result_file=None,
+                 dyn_integrator=None, dyn_algorithm=None, trace_node=None):
     """Tcl twin of :func:`analysis`; prints one RESULT line per phase:
     ``RESULT <phase> ok=.. seconds=.. neq=.. iters=i,i,.. times=s,s,..``
     (only from rank 0 with ``rank0_only``, for OpenSeesMP). With ``result_file`` the
-    lines are also appended to that file, which other ranks' output cannot interleave."""
+    lines are also appended to that file, which other ranks' output cannot interleave.
+    ``dyn_integrator`` / ``dyn_algorithm`` replace Newmark / ``algorithm`` in the transient
+    phase only (gravity keeps them). ``trace_node``: the rank holding that node writes its
+    x displacement after every transient step to trace_<pid>.txt (outside the timing)."""
     motion = motion or Motion.sweep()
     start_time = motion.strong_start() if start_time is None else start_time
     guard = "if {[getPID] == 0} " if rank0_only else "if {1} "
 
-    def setup(test):
+    def setup(test, alg=algorithm, integ=f"Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}"):
         return "\n".join(["wipeAnalysis", f"constraints {constraints}", f"numberer {numberer}",
                           system_line, "test " + " ".join(map(str, test)),
-                          f"algorithm {algorithm}",
-                          f"integrator Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}",
-                          "analysis Transient"])
+                          f"algorithm {alg}", f"integrator {integ}", "analysis Transient"])
 
     def run(name, steps, dt):
         line = (f'"RESULT {name} ok=$ok seconds=[expr $total * 1e-6] '
                 'neq=[systemSize] iters=[join $iters ,] times=[join $times ,]"')
         to_file = (f"; set fh [open {{{result_file}}} a]; puts $fh {line}; close $fh"
                    if result_file else "")
+        trace = trace_node is not None and name == "transient"
         return "\n".join([
-            "set iters {}", "set times {}", "set ok 0", "set total 0",
+            "set iters {}", "set times {}", "set ok 0", "set total 0", "set trace {}",
+            (f"set hasTrace [expr {{[lsearch -exact [getNodeTags] {trace_node}] >= 0}}]"
+             if trace else "set hasTrace 0"),
             f"for {{set i 0}} {{$i < {steps}}} {{incr i}} {{",
             "  set t [clock microseconds]",
             f"  set ok [analyze 1 {dt}]",
             "  set dt_us [expr [clock microseconds] - $t]",
             "  set total [expr $total + $dt_us]",
             "  lappend times [expr $dt_us * 1e-6]", "  lappend iters [testIter]",
+            f"  if {{$hasTrace}} {{lappend trace [format %.10e [nodeDisp {trace_node} 1]]}}"
+            if trace else "",
             "  if {$ok != 0} break", "}",
             guard + f"{{puts {line}{to_file}}}",
+            ('if {$hasTrace} {set fh [open trace_[getPID].txt w]; puts $fh [join $trace ,]; '
+             'close $fh}') if trace else "",
             "if {$ok != 0} {exit}",
         ])
 
@@ -403,5 +418,7 @@ def tcl_analysis(system_line, algorithm, material="elastic", motion=None, dyn_st
         lines.append(f"setTime {start_time!r}")
         if not input_defined:
             lines.append(tcl_input(motion))
-        lines += [setup(DYN_TEST), run("transient", dyn_steps, dyn_dt)]
+        lines += [setup(DYN_TEST, dyn_algorithm or algorithm,
+                        dyn_integrator or f"Newmark {NEWMARK_GAMMA} {NEWMARK_BETA}"),
+                  run("transient", dyn_steps, dyn_dt)]
     return "\n".join(lines) + "\n"
