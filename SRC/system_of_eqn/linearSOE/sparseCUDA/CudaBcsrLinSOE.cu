@@ -928,7 +928,7 @@ int CudaBcsrLinSOE::setDeviceAValues(const void *deviceSrc, int numNnz)
     }
     ensureDeviceVectorSizes();
     const std::size_t matrixBytes =
-        (getPrecision() == CudaPrecision::dFFI || getPrecision() == CudaPrecision::dDFI) ? sizeof(float)
+        (getPrecision() == CudaPrecision::dFFI || getPrecision() == CudaPrecision::dFDI) ? sizeof(float)
                                                                                          : sizeof(double);
     if (copyDeviceAsync(getDeviceAValues(), deviceSrc, static_cast<std::size_t>(numNnz) * matrixBytes,
                         "setDeviceAValues") != 0) {
