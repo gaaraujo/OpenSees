@@ -62,7 +62,7 @@ class HandAMG:
         def cb(*_a):
             count[0] += 1
         solver = spla.cg if self.krylov == "cg" else spla.gmres
-        extra = {} if self.krylov == "cg" else {"restart": 50,
+        extra = {} if self.krylov == "cg" else {"restart": 50, "callback_type": "pr_norm",
                                                  "maxiter": max(1, self.maxiter // 50)}
         if self.krylov == "cg":
             extra["maxiter"] = self.maxiter
