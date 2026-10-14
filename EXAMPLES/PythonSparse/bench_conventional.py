@@ -252,6 +252,8 @@ def _relres(kw):
     ptr, ind, val, n = _csr(kw)
     cls = sp.csr_matrix if kw["storage_scheme"] == "CSR" else sp.csc_matrix
     A = cls((val, ind, ptr), shape=(n, n))
+    if kw.get("matrix_type") == "SYMMETRIC_LOWER":   # only one triangle is stored
+        A = A + A.T - sp.diags(A.diagonal())
     b = np.frombuffer(kw["rhs"], np.float64, n)
     x = np.frombuffer(kw["x"], np.float64, n)
     nb = np.linalg.norm(b)
