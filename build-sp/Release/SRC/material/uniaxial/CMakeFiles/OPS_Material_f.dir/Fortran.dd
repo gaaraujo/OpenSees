@@ -1,7 +1,0 @@
-ninja_dyndep_version = 1.0
-build SRC/material/uniaxial/CMakeFiles/OPS_Material_f.dir/DoddRestrepo.f.o: dyndep
-
-build SRC/material/uniaxial/CMakeFiles/OPS_Material_f.dir/STEELDR.f.o: dyndep
-
-build SRC/material/uniaxial/CMakeFiles/OPS_Material_f.dir/c14-SK-M.f.o: dyndep
-

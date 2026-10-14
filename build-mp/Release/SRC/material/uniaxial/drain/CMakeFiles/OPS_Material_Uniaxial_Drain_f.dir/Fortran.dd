@@ -1,5 +1,0 @@
-ninja_dyndep_version = 1.0
-build SRC/material/uniaxial/drain/CMakeFiles/OPS_Material_Uniaxial_Drain_f.dir/anal00.f.o: dyndep
-
-build SRC/material/uniaxial/drain/CMakeFiles/OPS_Material_Uniaxial_Drain_f.dir/common00.f.o: dyndep
-

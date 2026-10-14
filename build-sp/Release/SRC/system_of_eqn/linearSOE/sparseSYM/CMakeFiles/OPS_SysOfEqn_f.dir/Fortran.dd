@@ -1,3 +1,0 @@
-ninja_dyndep_version = 1.0
-build SRC/system_of_eqn/linearSOE/sparseSYM/CMakeFiles/OPS_SysOfEqn_f.dir/genmmd.f.o: dyndep
-
