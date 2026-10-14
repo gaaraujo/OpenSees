@@ -70,7 +70,8 @@ private:
     void clearMTriplets(void) { mTripletMap.clear(); }
     void ensureEigenStorage(int numModes, int numEqn);
     int sendTripletMap(Channel *theChannel, const std::unordered_map<uint64_t, double> &map);
-    int recvAndMergeTripletMap(Channel *theChannel, std::vector<double> &values);
+    int recvAndMergeTripletMap(Channel *theChannel, std::vector<double> *values,
+                               bool merge);
 
     EigenSOE *thePythonSOE;
 
