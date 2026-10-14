@@ -186,6 +186,22 @@ def _commands(refine: int, material: str, plan: int | None = None):
     yield "rayleigh", (alpha_m, beta_k, 0.0, 0.0)
 
 
+def tie_violation(ops, refine: int = 1, material: str = "elastic", plan: int | None = None) -> dict:
+    """Largest |u_retained - u_constrained| over the equalDOF ties, absolute and relative to
+    the largest tied displacement. Zero (to round-off) under Transformation; under Penalty
+    it measures how well the penalty factor enforces the ties."""
+    worst, umax = 0.0, 0.0
+    for cmd, args in _commands(refine, material, plan):
+        if cmd != "equalDOF":
+            continue
+        master, slave, *dofs = args
+        for d in dofs:
+            um, us = ops.nodeDisp(master, d), ops.nodeDisp(slave, d)
+            worst = max(worst, abs(us - um))
+            umax = max(umax, abs(um), abs(us))
+    return {"max_abs": worst, "max_rel": worst / umax if umax > 0 else 0.0, "max_disp": umax}
+
+
 def build(ops, refine: int = 1, material: str = "elastic", plan: int | None = None) -> None:
     """Build the column in OpenSeesPy."""
     ops.wipe()
