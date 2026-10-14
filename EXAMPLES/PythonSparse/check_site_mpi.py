@@ -57,52 +57,59 @@ def main() -> int:
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--motion", default=None)
     ap.add_argument("--motion-dt", type=float, default=0.005)
-    ap.add_argument("--tol", type=float, default=None,
-                    help="override the gravity and transient NormDispIncr tolerances")
+    ap.add_argument("--dyn-tol", type=float, default=None,
+                    help="override the transient NormDispIncr tolerance (PIMY gravity "
+                         "does not converge much below its default)")
     args = ap.parse_args()
-    if args.tol:
-        bs.GRAVITY_TEST = ("NormDispIncr", args.tol, 50)
-        bs.DYN_TEST = ("NormDispIncr", args.tol, 50)
+    if args.dyn_tol:
+        bs.DYN_TEST = ("NormDispIncr", args.dyn_tol, 50)
     motion = bs.Motion.from_file(args.motion, args.motion_dt) if args.motion else None
     ok_all = True
+
+    def rel_diff(d, d_ref):
+        diff = max(np.max(np.abs(np.subtract(d[n], d_ref[n]))) for n in d)
+        return diff / max(np.max(np.abs(v)) for v in d_ref.values())
+
     for material in ("elastic", "pimy"):
         ref, err, d_ref = run(material, args.plan, args.steps, ("UmfPack",),
                               ("Transformation",), False, motion)
         assert err is None and all(v[0] == 0 for v in ref.values()), err
         it_ref = {k: v[1] for k, v in ref.items()}
-        cases = [
-            ("Mumps, Transformation", ("Mumps",), ("Transformation",)),
-            ("DistributedPythonSparse, Transformation",
-             ("DistributedPythonSparse", {"solver": HandSolver(), "scheme": "CSR"}),
-             ("Transformation",)),
-            ("Mumps, Penalty 1e12", ("Mumps",), ("Penalty", 1e12, 1e12)),
-            ("DistributedPythonSparse, Penalty 1e12",
-             ("DistributedPythonSparse", {"solver": HandSolver(), "scheme": "CSR"}),
-             ("Penalty", 1e12, 1e12)),
-        ]
-        for name, system_args, constraints in cases:
-            out, err, d = run(material, args.plan, args.steps, system_args, constraints,
-                              NP > 1, motion)
-            if err is not None:
-                ok_all = False
-                print(f"[rank {PID}/{NP}] {material:7s} {name:42s} ERROR {err}", flush=True)
-                continue
-            phases_ok = all(v[0] == 0 for v in out.values())
-            its = {k: v[1] for k, v in out.items()}
-            missing = [n for n in d if n not in d_ref]
-            diff = max((np.max(np.abs(np.subtract(d[n], d_ref[n]))) for n in d if n in d_ref),
-                       default=np.nan)
-            scale = max(np.max(np.abs(v)) for v in d_ref.values())
-            rel = diff / scale
-            tol = 1e-8 if constraints[0] == "Transformation" else 1e-5
-            good = phases_ok and not missing and rel <= tol
-            same_iters = its == it_ref
-            ok_all &= good
-            print(f"[rank {PID}/{NP}] {material:7s} {name:42s} local nodes {len(d):5d} "
-                  f"max|du|/max|u| {rel:.1e} iters {'same' if same_iters else 'DIFFER'} "
-                  f"(total per phase {[sum(v) for v in its.values()]} vs "
-                  f"{[sum(v) for v in it_ref.values()]}) -> {'ok' if good else 'FAIL'}",
-                  flush=True)
+        for constraints in (("Transformation",), ("Penalty", 1e12, 1e12)):
+            mumps = None
+            for solver in ("Mumps", "DistributedPythonSparse"):
+                system_args = ((solver,) if solver == "Mumps" else
+                               (solver, {"solver": HandSolver(), "scheme": "CSR"}))
+                name = f"{solver}, {constraints[0]}"
+                out, err, d = run(material, args.plan, args.steps, system_args, constraints,
+                                  NP > 1, motion)
+                if err is not None:
+                    ok_all = False
+                    print(f"[rank {PID}/{NP}] {material:7s} {name:38s} ERROR {err}", flush=True)
+                    continue
+                its = {k: v[1] for k, v in out.items()}
+                good = all(v[0] == 0 for v in out.values()) and all(n in d_ref for n in d)
+                rel = rel_diff(d, d_ref)
+                # Serial vs partitioned: exact for the elastic column; for PIMY the
+                # path-dependent response differs at the level of the convergence
+                # tolerance. Penalty adds its own constraint error.
+                tol_ref = (1e-8 if material == "elastic" else 1e-4) \
+                    if constraints[0] == "Transformation" else 1e-4
+                good &= rel <= tol_ref
+                line = (f"[rank {PID}/{NP}] {material:7s} {name:38s} nodes {len(d):4d} "
+                        f"vs serial {rel:.1e} iters/phase {[sum(v) for v in its.values()]} "
+                        f"(serial {[sum(v) for v in it_ref.values()]})")
+                if solver == "Mumps":
+                    mumps = (d, its)
+                elif mumps is not None:
+                    # DistributedPythonSparse vs Mumps on the same partition: same
+                    # equations, both direct; must agree to round-off.
+                    rel_m = rel_diff(d, mumps[0])
+                    good &= rel_m <= 1e-8 and its == mumps[1]
+                    line += (f" vs Mumps {rel_m:.1e}, iters "
+                             f"{'same' if its == mumps[1] else 'DIFFER'}")
+                ok_all &= good
+                print(line + f" -> {'ok' if good else 'FAIL'}", flush=True)
     return 0 if ok_all else 1
 
 
