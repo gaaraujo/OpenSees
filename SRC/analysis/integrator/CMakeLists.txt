@@ -77,6 +77,7 @@ target_sources(OPS_Analysis
        ExplicitAlpha_TP.cpp
        ExplicitAlphaMultiSOE.cpp
        ExplicitAlphaMultiSOE_TP.cpp
+       SparseExplicitAlpha.cpp
        NewmarkExplicit.cpp              # Andreas Schellenberg
        NewmarkHSFixedNumIter.cpp        # Andreas Schellenberg
        NewmarkHSIncrLimit.cpp           # Andreas Schellenberg
@@ -125,6 +126,7 @@ target_sources(OPS_Analysis
        ExplicitAlpha_TP.h
        ExplicitAlphaMultiSOE.h
        ExplicitAlphaMultiSOE_TP.h
+       SparseExplicitAlpha.h
        NewmarkExplicit.h
        NewmarkHSFixedNumIter.h
        NewmarkHSIncrLimit.h

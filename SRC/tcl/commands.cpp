@@ -263,6 +263,17 @@ extern void *OPS_CudaExplicitAlpha_TP(void);
 extern void *OPS_CudaKRAlpha_TP(void);
 extern void *OPS_CudaMKRAlpha_TP(void);
 #endif
+extern void *OPS_SparseExplicitAlpha(void);
+extern void *OPS_SparseKRAlpha(void);
+extern void *OPS_SparseMKRAlpha(void);
+extern void *OPS_SparseCsrLinSOE(void);
+#ifdef _PARALLEL_INTERPRETERS
+#include <DistributedSparseCsrLinSOE.h>
+extern void *OPS_DistributedSparseCsrLinSOE(void);
+#if defined(_MUMPS)
+extern void OPS_RegisterMumpsCsrBackend(void);
+#endif
+#endif
 extern void *OPS_NewmarkExplicit(void);
 extern void *OPS_NewmarkHSFixedNumIter(void);
 extern void *OPS_NewmarkHSIncrLimit(void);
@@ -3229,6 +3240,28 @@ specifySOE(ClientData clientData, Tcl_Interp *interp, int argc, TCL_Char **argv)
 #endif
   } 
 
+  // CPU CSR system (counterpart of CuDSS): -solver Umfpack|ProfileSPD|Mumps
+  else if (strcmp(argv[1],"SparseCSR") == 0) {
+#if defined(_PARALLEL_INTERPRETERS) && defined(_MUMPS)
+    OPS_RegisterMumpsCsrBackend();
+#endif
+    OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+    theSOE = (LinearSOE *)OPS_SparseCsrLinSOE();
+  }
+#ifdef _PARALLEL_INTERPRETERS
+  else if (strcmp(argv[1],"DistributedSparseCSR") == 0) {
+#if defined(_MUMPS)
+    OPS_RegisterMumpsCsrBackend();
+#endif
+    OPS_ResetInputNoBuilder(clientData, interp, 2, argc, argv, &theDomain);
+    DistributedSparseCsrLinSOE *theParallelSOE = (DistributedSparseCsrLinSOE *)OPS_DistributedSparseCsrLinSOE();
+    theSOE = theParallelSOE;
+    if (theParallelSOE != 0) {
+      theParallelSOE->setProcessID(OPS_rank);
+      theParallelSOE->setChannels(numChannels, theChannels);
+    }
+  }
+#endif // _PARALLEL_INTERPRETERS
 #if defined(_CUDA)
   // else if ((strcmp(argv[1],"BandGeneral_Single") == 0) || (strcmp(argv[1],"BandGEN_Single") == 0)
   //     || (strcmp(argv[1],"BandGen_Single") == 0)){
@@ -5367,6 +5400,20 @@ specifyIntegrator(ClientData clientData, Tcl_Interp *interp, int argc,
       theTransientAnalysis->setIntegrator(*theTransientIntegrator);
   }
 #endif
+  // CPU counterparts of CudaExplicitAlpha / CudaKRAlpha / CudaMKRAlpha (system SparseCSR)
+  else if (strcmp(argv[1],"SparseExplicitAlpha") == 0 || strcmp(argv[1],"SparseKRAlpha") == 0 ||
+           strcmp(argv[1],"SparseMKRAlpha") == 0) {
+    if (strcmp(argv[1],"SparseExplicitAlpha") == 0)
+      theTransientIntegrator = (TransientIntegrator *)OPS_SparseExplicitAlpha();
+    else if (strcmp(argv[1],"SparseKRAlpha") == 0)
+      theTransientIntegrator = (TransientIntegrator *)OPS_SparseKRAlpha();
+    else
+      theTransientIntegrator = (TransientIntegrator *)OPS_SparseMKRAlpha();
+    if (theTransientIntegrator == 0)
+      return TCL_ERROR;
+    if (theTransientAnalysis != 0)
+      theTransientAnalysis->setIntegrator(*theTransientIntegrator);
+  }
   
   else if (strcmp(argv[1],"AlphaOS") == 0) {
     theTransientIntegrator = (TransientIntegrator *)OPS_AlphaOS();
