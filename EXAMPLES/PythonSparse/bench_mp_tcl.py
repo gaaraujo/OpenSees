@@ -44,6 +44,9 @@ SYSTEMS = {
     # larger workspace relaxation (ICNTL(14) = 200%, MUMPS default 20%); default Mumps failed
     # in a gravity step at 126k on 32 ranks (memory was not the limit)
     "Tcl MP Mumps ICNTL14": "system Mumps -ICNTL14 200",
+    # METIS ordering (ICNTL(7) = 5); needs a MUMPS built with METIS (the OpenSees MUMPS
+    # build has PORD only, where ICNTL(7) = 7 picks among AMD / AMF / PORD / QAMD)
+    "Tcl MP Mumps METIS": "system Mumps -ICNTL14 200 -ICNTL7 5",
     "Tcl MP DistributedAmgX AMG":
         "system DistributedAmgX -solver PCG -preconditioner AMG -maxIters 2000 -relTolerance 1e-8",
 }
