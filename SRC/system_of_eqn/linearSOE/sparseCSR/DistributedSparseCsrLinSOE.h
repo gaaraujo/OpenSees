@@ -12,7 +12,8 @@
 // worker sends its RHS with a one-number header (-1 = matrix unchanged, otherwise the number of
 // triplets that follow), then the triplets; rank 0 merges, solves, and sends x (and b) back.
 //
-//   system DistributedSparseCSR <-solver Umfpack|ProfileSPD|Mumps> <-minDiagTol tol>
+//   system DistributedSparseCSR <-solver Umfpack|ProfileSPD|Mumps> <-minDiagTol tol> <-solverRanks all|root>
+//   (UMFPACK and ProfileSPD solve on rank 0; MUMPS on all ranks, as system Mumps, unless -solverRanks root)
 
 #ifndef DistributedSparseCsrLinSOE_h
 #define DistributedSparseCsrLinSOE_h

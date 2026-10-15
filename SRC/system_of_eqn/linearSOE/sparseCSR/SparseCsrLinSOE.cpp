@@ -35,11 +35,15 @@
 
 namespace {
 
-// Shared by `system SparseCSR` and `system DistributedSparseCSR`: <-solver Umfpack|ProfileSPD> <-minDiagTol tol>.
-bool parseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol)
+// Shared by `system SparseCSR` and `system DistributedSparseCSR`:
+//   <-solver Umfpack|ProfileSPD|Mumps> <-minDiagTol tol> <-solverRanks all|root>
+// -solverRanks (DistributedSparseCSR with Mumps): all = MUMPS factorizes and solves on every rank, as
+// `system Mumps` (default); root = on rank 0 only, as one GPU on rank 0 in CudaMKRAlpha.
+bool parseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol, bool &solverOnRoot)
 {
     solver = CsrMatrix::Solver::Umfpack;
     tol = 1.0e-12;
+    solverOnRoot = false;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *opt = OPS_GetString();
         if (opt == nullptr)
@@ -62,9 +66,20 @@ bool parseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol)
                 opserr << "WARNING system SparseCSR - invalid -minDiagTol\n";
                 return false;
             }
+        } else if (strcmp(opt, "-solverRanks") == 0 && OPS_GetNumRemainingInputArgs() > 0) {
+            const char *ranks = OPS_GetString();
+            if (ranks != nullptr && strcmp(ranks, "root") == 0) {
+                solverOnRoot = true;
+            } else if (ranks != nullptr && strcmp(ranks, "all") == 0) {
+                solverOnRoot = false;
+            } else {
+                opserr << "WARNING system SparseCSR - -solverRanks " << (ranks ? ranks : "")
+                       << "; want all or root\n";
+                return false;
+            }
         } else {
             opserr << "WARNING system SparseCSR - unknown option " << opt
-                   << "; want <-solver Umfpack|ProfileSPD|Mumps> <-minDiagTol tol>\n";
+                   << "; want <-solver Umfpack|ProfileSPD|Mumps> <-minDiagTol tol> <-solverRanks all|root>\n";
             return false;
         }
     }
@@ -77,14 +92,15 @@ void *OPS_SparseCsrLinSOE(void)
 {
     CsrMatrix::Solver solver;
     double tol;
-    if (!parseSparseCsrOptions(solver, tol))
+    bool solverOnRoot;
+    if (!parseSparseCsrOptions(solver, tol, solverOnRoot))
         return nullptr;
-    return new SparseCsrLinSOE(solver, tol);
+    return new SparseCsrLinSOE(solver, tol);  // one process: -solverRanks has no effect
 }
 
-bool OPS_ParseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol)
+bool OPS_ParseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol, bool &solverOnRoot)
 {
-    return parseSparseCsrOptions(solver, tol);
+    return parseSparseCsrOptions(solver, tol, solverOnRoot);
 }
 
 SparseCsrLinSOE::SparseCsrLinSOE(CsrMatrix::Solver solver, double profileMinDiagTol)
@@ -299,7 +315,7 @@ void SparseCsrLinSOE::setX(const Vector &x)
 
 void SparseCsrLinSOE::setDistributedSolve(bool distributed, bool participant)
 {
-    m_matA.setDistributed(distributed);
+    m_matA.setDistributed(distributed && !m_solverOnRoot);
     m_participant = participant;
 }
 
