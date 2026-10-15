@@ -316,12 +316,34 @@ int CsrMatrix::bindStructure(int numRows, int numNnz, const int *rowPtr, const i
     m_rowPtr = rowPtr;
     m_colIdx = colIdx;
     m_structureBound = true;
+    m_participant = false;
     m_analyzed = false;
     m_factored = false;
     if (hadOwned) {
         m_ownedValues.assign(static_cast<std::size_t>(numNnz), 0.0);
         m_values = m_ownedValues.data();
     }
+    return 0;
+}
+
+int CsrMatrix::bindParticipant(int numRows)
+{
+    if (!isCollective()) {
+        opserr << "WARNING CsrMatrix::bindParticipant - only a distributed MUMPS operator has participants\n";
+        return -1;
+    }
+    delete m_backend;
+    m_backend = nullptr;
+    m_numRows = numRows;
+    m_numNnz = 0;
+    m_rowPtr = nullptr;
+    m_colIdx = nullptr;
+    m_values = nullptr;
+    m_ownedValues.clear();
+    m_structureBound = true;
+    m_participant = true;
+    m_analyzed = false;
+    m_factored = false;
     return 0;
 }
 
@@ -363,13 +385,13 @@ int CsrMatrix::spmv(const double *x, double *y, double alpha, double beta) const
 
 int CsrMatrix::factorize()
 {
-    if (!m_structureBound || m_values == nullptr)
+    if (!m_structureBound || (m_values == nullptr && !m_participant))
         return -1;
     if (m_backend == nullptr) {
         if (m_solver == Solver::ProfileSPD)
             m_backend = new ProfileCsrBackend(m_profileMinDiagTol);
         else if (m_solver == Solver::Mumps)
-            m_backend = s_mumpsFactory != nullptr ? s_mumpsFactory() : nullptr;
+            m_backend = s_mumpsFactory != nullptr ? s_mumpsFactory(m_distributed) : nullptr;
         else
             m_backend = new UmfpackCsrBackend();
         if (m_backend == nullptr) {
@@ -399,9 +421,13 @@ int CsrMatrix::refactorize()
 
 int CsrMatrix::solve(const double *rhs, double *solution, int numRhs)
 {
-    if (!m_factored || rhs == nullptr || solution == nullptr || numRhs < 1)
+    if (!m_factored || numRhs < 1)
         return -1;
     const int n = m_numRows;
+    if (m_participant)  // the rank-0 operator owns the right-hand sides
+        return m_backend->solveMulti(nullptr, nullptr, n, numRhs) == 0 ? 0 : -2;
+    if (rhs == nullptr || solution == nullptr)
+        return -1;
     const double *b = rhs;
     if (rhs == solution) {
         m_work.assign(rhs, rhs + static_cast<std::size_t>(numRhs) * n);

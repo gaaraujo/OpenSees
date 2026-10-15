@@ -38,7 +38,8 @@ class CsrMatrix
 {
 public:
     enum class Solver { Umfpack, ProfileSPD, Mumps };
-    using BackendFactory = CsrDirectBackend *(*)();
+    /** distributed = true: the backend runs on every rank of the OpenSeesMP job (collective calls). */
+    using BackendFactory = CsrDirectBackend *(*)(bool distributed);
 
     /** Called by executables that link MUMPS (OpenSeesMP) before the first `system` command. */
     static void registerMumpsBackend(BackendFactory factory);
@@ -54,6 +55,13 @@ public:
     void reset();
 
     int bindStructure(int numRows, int numNnz, const int *rowPtr, const int *colIdx);
+    /** OpenSeesMP worker of a distributed backend: no structure or values, but it joins every
+     *  factorize() and solve() of the rank-0 operator (null right-hand sides). */
+    int bindParticipant(int numRows);
+    /** Before the first factorize(): run the backend across all ranks (MUMPS only). */
+    void setDistributed(bool distributed) { m_distributed = distributed; }
+    /** true when factorize() and solve() are collective over the OpenSeesMP ranks. */
+    bool isCollective() const { return m_distributed && m_solver == Solver::Mumps; }
     int bindValues(double *values);
     int copyValues(const double *values);
 
@@ -87,6 +95,8 @@ private:
     bool m_structureBound = false;
     bool m_analyzed = false;
     bool m_factored = false;
+    bool m_distributed = false;
+    bool m_participant = false;
 
     const int *m_rowPtr = nullptr;
     const int *m_colIdx = nullptr;

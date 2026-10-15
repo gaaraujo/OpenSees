@@ -122,6 +122,10 @@ private:
     int formTangentIntoSOE(int statFlag, double c1v, double c2v, double c3v);
     int formOperators(SparseCsrLinSOE *csrSOE, DistributedSparseCsrLinSOE *distSOE);
     int bindSharedStructure(SparseCsrLinSOE *csrSOE);
+    /** Distributed MUMPS: workers hold participant copies of M and alpha and join their collective
+     *  factorizations and solves at the same points as rank 0. */
+    int bindParticipants(SparseCsrLinSOE *csrSOE);
+    int numAlphaRhs(void) const;
     int applyStartCorrection(SparseCsrLinSOE *csrSOE, DistributedSparseCsrLinSOE *distSOE);
     int newStepPredictor(void);
     int transformRhs(SparseCsrLinSOE *csrSOE);

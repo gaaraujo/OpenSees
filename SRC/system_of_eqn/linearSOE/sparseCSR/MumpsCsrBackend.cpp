@@ -6,11 +6,14 @@
 // Written: gaaraujo
 // Created: 10/2026
 //
-// Description: MUMPS backend for CsrMatrix: sequential MUMPS on MPI_COMM_SELF (the process that
-// owns the operator, rank 0 under OpenSeesMP), centralized assembled input, unsymmetric, with the
-// ordering and workspace defaults of `system Mumps` (ICNTL(7) = 7, ICNTL(14) = 20). Several
-// right-hand sides are solved in one call. Compiled only into executables that link MUMPS; the
-// interpreter calls OPS_RegisterMumpsCsrBackend() before creating a SparseCSR system.
+// Description: MUMPS backend for CsrMatrix. Distributed (DistributedSparseCSR): MUMPS runs on every
+// rank of the OpenSeesMP job, on a duplicate of MPI_COMM_WORLD, so the factorization and the solves
+// are parallel as in `system Mumps`; the matrix and the right-hand sides are centralized on rank 0
+// (the MUMPS host, which owns the operator), and the other ranks join each call with no data.
+// Otherwise (SparseCSR) MUMPS runs on MPI_COMM_SELF. Unsymmetric, with the ordering and workspace
+// defaults of `system Mumps` (ICNTL(7) = 7, ICNTL(14) = 20); several right-hand sides in one call.
+// Compiled only into executables that link MUMPS; the interpreter calls OPS_RegisterMumpsCsrBackend()
+// before creating a SparseCSR system.
 
 #include "CsrDirectBackend.h"
 #include "CsrMatrix.h"
@@ -28,13 +31,17 @@ namespace {
 class MumpsCsrBackend : public CsrDirectBackend
 {
 public:
-    MumpsCsrBackend()
+    explicit MumpsCsrBackend(bool distributed)
     {
+        // Collective over the ranks of the communicator: every rank creates its backend at the same
+        // point (CsrMatrix creates it lazily in factorize(), which all ranks call in the same order).
+        MPI_Comm_dup(distributed ? MPI_COMM_WORLD : MPI_COMM_SELF, &m_comm);
+        MPI_Comm_rank(m_comm, &m_rank);
         std::memset(&m_id, 0, sizeof(m_id));
         m_id.job = -1;
-        m_id.par = 1;
+        m_id.par = 1;  // the host (rank 0) takes part in the factorization
         m_id.sym = 0;
-        m_id.comm_fortran = (MUMPS_INT)MPI_Comm_c2f(MPI_COMM_SELF);
+        m_id.comm_fortran = (MUMPS_INT)MPI_Comm_c2f(m_comm);
         dmumps_c(&m_id);
         m_init = (m_id.infog[0] == 0);
         if (!m_init)
@@ -48,6 +55,7 @@ public:
             m_id.job = -2;
             dmumps_c(&m_id);
         }
+        MPI_Comm_free(&m_comm);
     }
 
     int analyze(int n, int nnz, const int *rowPtr, const int *colIdx) override
@@ -55,6 +63,8 @@ public:
         if (!m_init)
             return -1;
         m_n = n;
+        if (!isHost())
+            return 0;  // centralized input: only the host holds the pattern
         m_irn.resize(static_cast<std::size_t>(nnz));
         m_jcn.resize(static_cast<std::size_t>(nnz));
         m_a.assign(static_cast<std::size_t>(nnz), 0.0);
@@ -72,12 +82,14 @@ public:
     {
         if (!m_init)
             return -1;
-        std::memcpy(m_a.data(), values, m_a.size() * sizeof(double));
-        m_id.n = m_n;
-        m_id.nnz = static_cast<MUMPS_INT8>(m_a.size());
-        m_id.irn = m_irn.data();
-        m_id.jcn = m_jcn.data();
-        m_id.a = m_a.data();
+        if (isHost()) {
+            std::memcpy(m_a.data(), values, m_a.size() * sizeof(double));
+            m_id.n = m_n;
+            m_id.nnz = static_cast<MUMPS_INT8>(m_a.size());
+            m_id.irn = m_irn.data();
+            m_id.jcn = m_jcn.data();
+            m_id.a = m_a.data();
+        }
         if (!m_analyzed) {
             m_id.job = 1;
             dmumps_c(&m_id);
@@ -105,12 +117,14 @@ public:
     {
         if (!m_init || !m_analyzed)
             return -1;
-        // MUMPS overwrites the centralized RHS with the solution.
-        if (x != b)
-            std::memcpy(x, b, static_cast<std::size_t>(n) * numRhs * sizeof(double));
-        m_id.rhs = x;
-        m_id.nrhs = numRhs;
-        m_id.lrhs = n;
+        // MUMPS overwrites the centralized RHS (on the host) with the solution.
+        if (isHost()) {
+            if (x != b)
+                std::memcpy(x, b, static_cast<std::size_t>(n) * numRhs * sizeof(double));
+            m_id.rhs = x;
+            m_id.nrhs = numRhs;
+            m_id.lrhs = n;
+        }
         m_id.job = 3;
         dmumps_c(&m_id);
         return report("solve");
@@ -139,6 +153,10 @@ private:
         return 0;
     }
 
+    bool isHost() const { return m_rank == 0; }
+
+    MPI_Comm m_comm = MPI_COMM_NULL;
+    int m_rank = 0;
     DMUMPS_STRUC_C m_id;
     bool m_init = false;
     bool m_analyzed = false;
@@ -147,9 +165,9 @@ private:
     std::vector<double> m_a;
 };
 
-CsrDirectBackend *createMumpsCsrBackend()
+CsrDirectBackend *createMumpsCsrBackend(bool distributed)
 {
-    return new MumpsCsrBackend();
+    return new MumpsCsrBackend(distributed);
 }
 
 } // namespace
