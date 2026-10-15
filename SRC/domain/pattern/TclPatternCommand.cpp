@@ -525,7 +525,10 @@ TclPatternCommand(ClientData clientData, Tcl_Interp *interp,
         }
       }
 
-      int do_coordinate_transformation=true;
+      // Defaults as in OPS_H5DRMLoadPattern: no transformation, identity T, zero x0.
+      // (Before, the transformation was on by default and T, x0 came from the
+      // uninitialized stuff[] below whenever fewer than 12 values were given.)
+      int do_coordinate_transformation=false;
       if(argc > 7)
       {
         if (Tcl_GetInt(interp, argv[7], &do_coordinate_transformation) != TCL_OK) 
@@ -535,7 +538,7 @@ TclPatternCommand(ClientData clientData, Tcl_Interp *interp,
               return TCL_ERROR;
         }
       }
-      double stuff[12];
+      double stuff[12] = {1.0, 0.0, 0.0,  0.0, 1.0, 0.0,  0.0, 0.0, 1.0,  0.0, 0.0, 0.0};
       if(argc > 7+12)
       {
         for (int i = 0; i < 12; ++i)

@@ -356,6 +356,11 @@ void H5DRMLoadPattern::do_intitialization()
     Matrix xyz;
     Vector drmbox_x0;
     read_double_dataset_into_vector(ih5_fname, "DRM_Metadata/drmbox_x0", drmbox_x0);
+    if (drmbox_x0.Size() != 3) {
+        // DRM_Metadata/drmbox_x0 is optional; without it the vector is empty, and the
+        // transformation and the matching printout below would read past it
+        drmbox_x0 = Vector(3);
+    }
     read_double_dataset_into_matrix(ih5_fname, "DRM_Data/xyz", xyz);
     read_int_dataset_into_id(ih5_fname, "DRM_Data/internal", internal);
     read_int_dataset_into_id(ih5_fname, "DRM_Data/data_location", station_id2data_pos);
