@@ -272,6 +272,35 @@ def tcl(refine: int = 1, material: str = "elastic", plan: int | None = None) -> 
     return "\n".join(lines) + "\n"
 
 
+def done_runs(path, meta: dict, key_fields) -> dict:
+    """Records already in a results file, for resuming a requeued job.
+
+    Only records under a ``meta`` line whose entries match ``meta`` (the current invocation's
+    settings, e.g. steps, executable, motion) count, so a file holding runs with other settings
+    never causes a skip. Returns {key: record} with key = tuple of ``key_fields``; any outcome
+    (ok, failure, timeout) counts as done. Lines that do not parse (a write cut short when the
+    job was preempted) are ignored.
+    """
+    import json
+    want = json.loads(json.dumps(meta))   # tuples -> lists, as they come back from the file
+    out, active = {}, False
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if "meta" in r:
+            active = all(r["meta"].get(k) == v for k, v in want.items())
+            continue
+        if active:
+            out[tuple(r.get(k) for k in key_fields)] = r
+    return out
+
+
 def run_stamp() -> dict:
     """Time, host and code version for result headers (runs append, never overwrite)."""
     import datetime

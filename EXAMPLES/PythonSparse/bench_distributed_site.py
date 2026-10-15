@@ -99,6 +99,8 @@ def main() -> int:
     ap.add_argument("--single", nargs=4, metavar=("MATERIAL", "SIZE", "ALGORITHM", "CONFIG"),
                     help=argparse.SUPPRESS)
     ap.add_argument("--result-file", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--no-resume", action="store_true",
+                    help="rerun configurations already recorded in --out (default: skip them)")
     args = ap.parse_args()
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
 
@@ -124,6 +126,11 @@ def main() -> int:
             "start_time": motion.strong_start(), "steps": args.steps,
             "dyn_test": bs.DYN_TEST, "gravity_test": bs.GRAVITY_TEST, "dyn_dt": bs.DYN_DT,
             "distributed": True}
+    # resume after a requeue: runs recorded under an equivalent meta line are not repeated
+    same = {k: meta[k] for k in ("opensees", "motion", "start_time", "steps", "dyn_test",
+                                 "gravity_test", "dyn_dt")}
+    done = {} if args.no_resume else bs.done_runs(
+        args.out, same, ("material", "size", "np", "algorithm", "config"))
     out = open(args.out, "a", encoding="utf-8")
     out.write(json.dumps({"meta": meta}) + "\n")
     skipped = set()
@@ -134,6 +141,13 @@ def main() -> int:
                     for name in names:
                         key = (material, nproc, alg, name)
                         if key in skipped:
+                            continue
+                        prev = done.get((material, size, nproc, alg, name))
+                        if prev is not None:
+                            print(f"{material:7s} {size:5s} np={nproc:<3d} {alg:22s} {name:26s} "
+                                  f"already recorded (ok={prev['ok']}), skipped", flush=True)
+                            if prev["ok"] == -997:
+                                skipped.add(key)
                             continue
                         fd, result_file = tempfile.mkstemp(prefix="bench_dps_", suffix=".json")
                         os.close(fd)

@@ -522,6 +522,8 @@ def main() -> int:
                     help='constraint handler, e.g. "Penalty 1e12 1e12"')
     ap.add_argument("--numberer", default="RCM", choices=["RCM", "Plain", "auto"],
                     help="auto: Plain for direct solvers, RCM for iterative ones")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="rerun configurations already recorded in --out (default: skip them)")
     ap.add_argument("--list", action="store_true", help="print the configurations and exit")
     ap.add_argument("--single", nargs=4, metavar=("MATERIAL", "SIZE", "ALGORITHM", "CONFIG"),
                     help=argparse.SUPPRESS)
@@ -557,6 +559,11 @@ def main() -> int:
         meta["openseespy_solvers"] = openseespy_solvers.__version__
     except ImportError:
         pass
+    # resume after a requeue: runs recorded under an equivalent meta line are not repeated
+    same = {k: meta[k] for k in ("motion", "start_time", "steps", "dyn_test", "gravity_test",
+                                 "dyn_dt", "tcl_exe")}
+    key_fields = ("material", "size", "algorithm", "config", "constraints", "numberer", "iter_rtol")
+    done = {} if args.no_resume else bs.done_runs(args.out, same, key_fields)
     out = open(args.out, "a", encoding="utf-8")
     out.write(json.dumps({"meta": meta}) + "\n")
     skipped = set()   # (material, alg, config) that timed out at a smaller size
@@ -567,6 +574,14 @@ def main() -> int:
                 for name in names:
                     key = (material, alg, name)
                     if key in skipped:
+                        continue
+                    prev = done.get((material, size, alg, name, CONSTRAINTS, numberer_for(name),
+                                     args.iter_rtol if is_inexact(name) else None))
+                    if prev is not None:
+                        print(f"{material:7s} {size:5s} {alg:22s} {name:26s} already recorded "
+                              f"(ok={prev['ok']}), skipped", flush=True)
+                        if prev["ok"] == -997:
+                            skipped.add(key)
                         continue
                     t0 = time.perf_counter()
                     if name in TCL_CONFIGS:

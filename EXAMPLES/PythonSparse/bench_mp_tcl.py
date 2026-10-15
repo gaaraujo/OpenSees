@@ -124,6 +124,8 @@ def main() -> int:
                     help="record the surface corner node's x displacement every transient step")
     ap.add_argument("--slab", action="store_true",
                     help="each rank builds a horizontal slab of the column (no partition)")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="rerun configurations already recorded in --out (default: skip them)")
     args = ap.parse_args()
     global NUMBERER, INTEGRATOR, TRACE, SLAB
     NUMBERER, INTEGRATOR, TRACE, SLAB = args.numberer, args.integrator, args.trace, args.slab
@@ -134,11 +136,16 @@ def main() -> int:
         # Inside a Slurm job (and a container) Hydra must fork the ranks locally
         # instead of launching them through Slurm.
         env.setdefault("I_MPI_HYDRA_BOOTSTRAP", "fork")
+    meta = {**bs.run_stamp(), "platform": platform.platform(), "exe": args.exe,
+            "motion": motion.name, "start_time": motion.strong_start(),
+            "steps": args.steps, "dyn_test": bs.DYN_TEST, "distributed": True, "tcl": True}
+    # resume after a requeue: runs recorded under an equivalent meta line are not repeated
+    same = {k: meta[k] for k in ("exe", "motion", "start_time", "steps", "dyn_test")}
+    key_fields = ("material", "size", "np", "algorithm", "config", "numberer", "integrator", "build")
+    done = {} if args.no_resume else bs.done_runs(args.out, same, key_fields)
+    build = "slab" if SLAB else "partition"
     out = open(args.out, "a", encoding="utf-8")
-    out.write(json.dumps({"meta": {**bs.run_stamp(), "platform": platform.platform(), "exe": args.exe,
-                                   "motion": motion.name, "start_time": motion.strong_start(),
-                                   "steps": args.steps, "dyn_test": bs.DYN_TEST,
-                                   "distributed": True, "tcl": True}}) + "\n")
+    out.write(json.dumps({"meta": meta}) + "\n")
     skipped = set()
     for material in args.materials:
         for size in args.sizes:
@@ -147,6 +154,13 @@ def main() -> int:
                     for name in args.systems:
                         key = (material, nproc, alg, name)
                         if key in skipped:
+                            continue
+                        prev = done.get((material, size, nproc, alg, name, NUMBERER, INTEGRATOR, build))
+                        if prev is not None:
+                            print(f"{material:7s} {size:5s} np={nproc:<3d} {alg:22s} {name:30s} "
+                                  f"already recorded (ok={prev['ok']}), skipped", flush=True)
+                            if prev["ok"] == -997:
+                                skipped.add(key)
                             continue
                         workdir = tempfile.mkdtemp(prefix="bench_mp_")
                         path = os.path.join(workdir, "run.tcl")
