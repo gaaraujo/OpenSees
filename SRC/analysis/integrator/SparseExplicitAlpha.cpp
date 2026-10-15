@@ -252,6 +252,9 @@ int SparseExplicitAlpha::bindSharedStructure(SparseCsrLinSOE *csrSOE)
         matM = new CsrMatrix(s, tol);
         matAlpha = new CsrMatrix(s, tol);
         matA = new CsrMatrix(s, tol);
+        // distributed MUMPS: M and alpha factorized and solved on all ranks (matA: products only)
+        matM->setDistributed(csrSOE->isCollectiveSolver());
+        matAlpha->setDistributed(csrSOE->isCollectiveSolver());
     }
     const bool samePattern = boundRows == n && boundNnz == nnz && boundRowPtr == rowPtr &&
                              boundColIdx == colIdx && matM->isStructureBound();
@@ -268,6 +271,28 @@ int SparseExplicitAlpha::bindSharedStructure(SparseCsrLinSOE *csrSOE)
     return 0;
 }
 
+int SparseExplicitAlpha::bindParticipants(SparseCsrLinSOE *csrSOE)
+{
+    const int n = csrSOE->getNumEqn();
+    if (matM == nullptr) {
+        matM = new CsrMatrix(CsrMatrix::Solver::Mumps);
+        matAlpha = new CsrMatrix(CsrMatrix::Solver::Mumps);
+        matM->setDistributed(true);
+        matAlpha->setDistributed(true);
+    }
+    if (boundRows != n || !matM->isStructureBound()) {
+        if (matM->bindParticipant(n) != 0 || matAlpha->bindParticipant(n) != 0)
+            return -1;
+        boundRows = n;
+    }
+    return 0;
+}
+
+int SparseExplicitAlpha::numAlphaRhs(void) const
+{
+    return (areAlphaMFClose() || incrementalAccel) ? 1 : 2;
+}
+
 int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSparseCsrLinSOE *distSOE)
 {
     // All three assemblies are collective under OpenSeesMP (each ends with a triplet merge on
@@ -277,6 +302,7 @@ int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSpars
     const double gdt = gamma * deltaT;
     const bool areClose = areAlphaMFClose();
     const bool root = isRoot(distSOE);
+    const bool collective = csrSOE->isCollectiveSolver();
     int rc = 0;
 
     if (formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0)
@@ -300,16 +326,31 @@ int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSpars
     if (root && rc == 0 && matA->copyValues(csrSOE->getAValuesData()) != 0)
         rc = -5;
 
+    if (!root && collective) {
+        // join rank 0's factorizations, in the same order (alpha, then M)
+        if (bindParticipants(csrSOE) != 0 || matAlpha->refactorize() != 0 || matM->refactorize() != 0)
+            rc = -4;
+    }
+    if (root && collective && rc != 0) {
+        // the workers are entering the collective factorizations: enter them too, then report the failure
+        if (matAlpha != nullptr && matM != nullptr) {
+            matAlpha->refactorize();
+            matM->refactorize();
+        }
+    }
     if (root && rc == 0) {
         const int n = csrSOE->getNumEqn();
-        const int numRhs = (areClose || incrementalAccel) ? 1 : 2;
+        const int numRhs = numAlphaRhs();
         alphaRhs.assign(static_cast<std::size_t>(numRhs) * n, 0.0);
         alphaSol.assign(static_cast<std::size_t>(numRhs) * n, 0.0);
         w2.assign(static_cast<std::size_t>(n), 0.0);
-        if (matAlpha->refactorize() != 0) {
+        // both factorizations are always entered (collective under distributed MUMPS)
+        const int rcAlpha = matAlpha->refactorize();
+        const int rcM = matM->refactorize();
+        if (rcAlpha != 0) {
             opserr << "ERROR SparseExplicitAlpha::formOperators - alpha factorization failed\n";
             rc = -4;
-        } else if (matM->refactorize() != 0) {
+        } else if (rcM != 0) {
             opserr << "ERROR SparseExplicitAlpha::formOperators - M factorization failed\n";
             rc = -2;
         }
@@ -435,9 +476,13 @@ int SparseExplicitAlpha::applyStartCorrection(SparseCsrLinSOE *csrSOE, Distribut
         if (rc == 0)
             distSOE->zeroB();
     }
-    if (isRoot(distSOE) && rc == 0) {
+    if (isRoot(distSOE)) {
         Vector &b = csrSOE->getHostBVector();
-        rc = (b.Size() > 0 && matM != nullptr) ? matM->solve(&b(0), &(*Udotdot)(0), 1) : -5;
+        const int rcSolve = (b.Size() > 0 && matM != nullptr) ? matM->solve(&b(0), &(*Udotdot)(0), 1) : -5;
+        if (rc == 0)
+            rc = rcSolve;
+    } else if (csrSOE->isCollectiveSolver()) {
+        rc = matM->solve(nullptr, nullptr, 1);  // join rank 0's M solve
     }
     if (distSOE != nullptr) {
         Vector status(1);
@@ -550,6 +595,10 @@ int SparseExplicitAlpha::newStep(double _deltaT)
         opserr << "ERROR SparseExplicitAlpha::newStep() - predictor failed\n";
         return -5;
     }
+    if (!root && csrSOE->isCollectiveSolver() && matAlpha->solve(nullptr, nullptr, numAlphaRhs()) != 0) {
+        opserr << "ERROR SparseExplicitAlpha::newStep() - predictor failed\n";
+        return -5;  // joined rank 0's alpha solve
+    }
     if (distSOE != nullptr) {
         // Broadcast the predicted kinematics so workers share rank 0's predictor result.
         if (distSOE->broadcastFromRoot(*U) < 0 || distSOE->broadcastFromRoot(*Udot) < 0 ||
@@ -607,8 +656,13 @@ int SparseExplicitAlpha::formUnbalance()
         int rc = distSOE->mergeBToRoot();
         if (rc == 0)
             distSOE->zeroB();
-        if (isRoot(distSOE) && rc == 0 && !areAlphaMFClose())
-            rc = transformRhs(csrSOE);
+        if (isRoot(distSOE) && !areAlphaMFClose()) {
+            const int rcT = transformRhs(csrSOE);
+            if (rc == 0)
+                rc = rcT;
+        } else if (!isRoot(distSOE) && csrSOE->isCollectiveSolver() && !areAlphaMFClose()) {
+            rc = matM->solve(nullptr, nullptr, 1);  // join rank 0's M solve
+        }
         Vector status(1);
         status(0) = (rc == 0) ? 1.0 : -1.0;
         if (distSOE->broadcastFromRoot(status) < 0)

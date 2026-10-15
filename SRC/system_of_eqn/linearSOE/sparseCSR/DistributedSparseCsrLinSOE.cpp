@@ -384,6 +384,9 @@ DistributedSparseCsrLinSOE::solve(void)
         }
         if (sendA && sendTripletArrays(theChannel) < 0)
             return -1;
+        // Distributed MUMPS: join rank 0's factorization and solve of A.
+        if (theCsrSOE->isCollectiveSolver())
+            theCsrSOE->solve();
 
         theChannel->recvVector(0, 0, vectX);
         if (!skipBMerge)
@@ -426,8 +429,14 @@ DistributedSparseCsrLinSOE::solve(void)
             result(0) = -1;
     }
 
-    if (result(0) == 0)
+    if (theCsrSOE->isCollectiveSolver()) {
+        // The workers are already inside the collective call: always enter it.
+        const int rc = theCsrSOE->solve();
+        if (result(0) == 0)
+            result(0) = rc;
+    } else if (result(0) == 0) {
         result(0) = theCsrSOE->solve();
+    }
 
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
@@ -586,6 +595,7 @@ int
 DistributedSparseCsrLinSOE::setProcessID(int dTag)
 {
     processID = dTag;
+    theCsrSOE->setDistributedSolve(numChannels > 0, processID != 0);
     return 0;
 }
 
@@ -601,5 +611,6 @@ DistributedSparseCsrLinSOE::setChannels(int nChannels, Channel **theC)
         for (int i = 0; i < numChannels; ++i)
             theChannels[i] = theC[i];
     }
+    theCsrSOE->setDistributedSolve(numChannels > 0, processID != 0);
     return 0;
 }

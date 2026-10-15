@@ -70,6 +70,11 @@ public:
     void setMatrixStatus(MatrixStatus status) { m_matrixStatus = status; }
 
     CsrMatrix::Solver getCsrSolver(void) const { return m_solver; }
+    /** Set by DistributedSparseCsrLinSOE: distributed = more than one rank; participant = a worker. With
+     *  -solver Mumps the factorization and solve of A are then collective (see isCollectiveSolver). */
+    void setDistributedSolve(bool distributed, bool participant);
+    /** true for distributed MUMPS: every rank calls solve() at the same point. */
+    bool isCollectiveSolver(void) const { return m_matA.isCollective(); }
     double getProfileMinDiagTol(void) const { return m_profileMinDiagTol; }
 
     // Host CSR accessors (layout [rowPtr (n+1) | colIdx (nnz)], as CudaBcsrLinSOE)
@@ -91,6 +96,7 @@ private:
     CsrMatrix::Solver m_solver;
     double m_profileMinDiagTol;
     MatrixStatus m_matrixStatus;
+    bool m_participant = false;
 
     std::vector<int> m_csrIndices;
     std::vector<double> m_aValues, m_hostB, m_hostX;

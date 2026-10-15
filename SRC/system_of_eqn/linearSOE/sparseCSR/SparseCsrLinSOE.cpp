@@ -297,11 +297,34 @@ void SparseCsrLinSOE::setX(const Vector &x)
         m_X = x;
 }
 
+void SparseCsrLinSOE::setDistributedSolve(bool distributed, bool participant)
+{
+    m_matA.setDistributed(distributed);
+    m_participant = participant;
+}
+
 // MatrixStatus gates the work, as CudaBcsrLinSOE + CudaDirectSparseSolver: a new pattern is analyzed
 // and factorized, new values are refactorized, and an unchanged matrix is only solved.
 int SparseCsrLinSOE::solve(void)
 {
     const int n = m_X.Size();
+    if (m_participant) {
+        // OpenSeesMP worker: nothing to solve, except joining a distributed MUMPS factorization/solve
+        // of rank 0's A (same status-driven sequence of calls as rank 0).
+        if (!m_matA.isCollective())
+            return 0;
+        int rc = 0;
+        if (m_matrixStatus == MatrixStatus::STRUCTURE_CHANGED || !m_matA.isStructureBound()) {
+            rc = m_matA.bindParticipant(n);
+            if (rc == 0)
+                rc = m_matA.factorize();
+        } else if (m_matrixStatus == MatrixStatus::COEFFICIENTS_CHANGED || !m_matA.isFactored()) {
+            rc = m_matA.refactorize();
+        }
+        if (rc == 0)
+            rc = m_matA.solve(nullptr, nullptr, 1);
+        return rc == 0 ? 0 : -1;
+    }
     if (n == 0 || m_aValues.empty())
         return 0;
 
