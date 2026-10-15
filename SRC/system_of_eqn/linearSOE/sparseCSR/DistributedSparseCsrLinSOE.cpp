@@ -22,15 +22,18 @@
 #include <classTags.h>
 #include <OPS_Globals.h>
 
-bool OPS_ParseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol);
+bool OPS_ParseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol, bool &solverOnRoot);
 
 void *OPS_DistributedSparseCsrLinSOE(void)
 {
     CsrMatrix::Solver solver;
     double tol;
-    if (!OPS_ParseSparseCsrOptions(solver, tol))
+    bool solverOnRoot;
+    if (!OPS_ParseSparseCsrOptions(solver, tol, solverOnRoot))
         return nullptr;
-    return new DistributedSparseCsrLinSOE(new SparseCsrLinSOE(solver, tol));
+    SparseCsrLinSOE *csr = new SparseCsrLinSOE(solver, tol);
+    csr->setSolverOnRoot(solverOnRoot);
+    return new DistributedSparseCsrLinSOE(csr);
 }
 
 uint64_t

@@ -73,6 +73,8 @@ public:
     /** Set by DistributedSparseCsrLinSOE: distributed = more than one rank; participant = a worker. With
      *  -solver Mumps the factorization and solve of A are then collective (see isCollectiveSolver). */
     void setDistributedSolve(bool distributed, bool participant);
+    /** -solverRanks root: keep MUMPS on rank 0 even under DistributedSparseCSR (set before setDistributedSolve). */
+    void setSolverOnRoot(bool onRoot) { m_solverOnRoot = onRoot; }
     /** true for distributed MUMPS: every rank calls solve() at the same point. */
     bool isCollectiveSolver(void) const { return m_matA.isCollective(); }
     double getProfileMinDiagTol(void) const { return m_profileMinDiagTol; }
@@ -97,6 +99,7 @@ private:
     double m_profileMinDiagTol;
     MatrixStatus m_matrixStatus;
     bool m_participant = false;
+    bool m_solverOnRoot = false;
 
     std::vector<int> m_csrIndices;
     std::vector<double> m_aValues, m_hostB, m_hostX;
