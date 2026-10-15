@@ -351,6 +351,21 @@ class Motion:
             k -= 1
         return k * self.dt
 
+    def significant_window(self, lo=0.05, hi=0.95):
+        """(start, end) of the D5-95 significant duration (Arias intensity of the acceleration
+        from the velocity record), with the start moved back to the velocity zero crossing at
+        or before D5 so that the base force does not jump."""
+        v, dt = self.values, self.dt
+        arias = [0.0]
+        for i in range(len(v) - 1):
+            arias.append(arias[-1] + ((v[i + 1] - v[i]) / dt) ** 2 * dt)
+        total = arias[-1]
+        k5 = next(i for i, x in enumerate(arias) if x >= lo * total)
+        k95 = next(i for i, x in enumerate(arias) if x >= hi * total)
+        while k5 > 0 and v[k5 - 1] * v[k5] > 0:
+            k5 -= 1
+        return k5 * dt, k95 * dt
+
 
 def add_input(ops, motion=None):
     """Base force pattern F = INPUT_FACTOR * c * v(t) on the base master node.

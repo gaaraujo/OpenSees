@@ -47,6 +47,9 @@ SYSTEMS = {
     # METIS ordering (ICNTL(7) = 5); needs a MUMPS built with METIS (the OpenSees MUMPS
     # build has PORD only, where ICNTL(7) = 7 picks among AMD / AMF / PORD / QAMD)
     "Tcl MP Mumps METIS": "system Mumps -ICNTL14 200 -ICNTL7 5",
+    # rank 0 solves the gathered CSR system with sequential MUMPS (CPU twin of DistributedCuDSS;
+    # needs a build with the sparseCSR systems, diss-ch4-order2)
+    "Tcl MP DistributedSparseCSR Mumps": "system DistributedSparseCSR -solver Mumps",
     "Tcl MP DistributedAmgX AMG":
         "system DistributedAmgX -solver PCG -preconditioner AMG -maxIters 2000 -relTolerance 1e-8",
 }
@@ -60,8 +63,11 @@ NUMBERER = "ParallelRCM"     # --numberer; ParallelPlain leaves the ordering to 
 # CudaMKRAlpha on CuDSS / DistributedCuDSS.
 INTEGRATORS = {"Newmark": (None, None),
                "MKRAlpha": ("MKRAlphaExplicitMultiSOE 0.5", "Linear"),
-               "CudaMKRAlpha": ("CudaMKRAlpha 0.5", "Linear")}
+               "CudaMKRAlpha": ("CudaMKRAlpha 0.5", "Linear"),
+               # CPU twin of CudaMKRAlpha (same sparse operators, CPU solver; diss-ch4-order2)
+               "SparseMKRAlpha": ("SparseMKRAlpha 0.5", "Linear")}
 INTEGRATOR = "Newmark"
+START = None                 # --window d5-95: transient start time (default: strong_start)
 TRACE = False                # --trace: record the surface corner node's x displacement
 
 
@@ -81,7 +87,7 @@ def script(material, size, alg, system_line, motion, steps, nproc=None, workdir=
         build = bs.tcl(refine, material, plan) + bs.tcl_input(motion) + "partition\n"
     return (build
             + bs.tcl_analysis(system_line, ALGORITHMS[alg], material, motion=motion,
-                              dyn_steps=steps, numberer=NUMBERER, input_defined=True,
+                              dyn_steps=steps, start_time=START, numberer=NUMBERER, input_defined=True,
                               rank0_only=True, result_file=RESULT_FILE,
                               dyn_integrator=integ, dyn_algorithm=dyn_alg,
                               trace_node=[bs.top_node(refine, plan), bs.base_master(refine)]
@@ -116,7 +122,11 @@ def main() -> int:
     ap.add_argument("--materials", nargs="+", default=["pimy"])
     ap.add_argument("--algorithms", nargs="+", default=list(ALGORITHMS), choices=list(ALGORITHMS))
     ap.add_argument("--systems", nargs="+", default=list(SYSTEMS), choices=list(SYSTEMS))
-    ap.add_argument("--steps", type=int, default=200)
+    ap.add_argument("--steps", type=int, default=None,
+                    help="transient steps (default 200; with --window d5-95, the whole window)")
+    ap.add_argument("--window", default="strong", choices=["strong", "d5-95"],
+                    help="strong: from the zero crossing before the peak velocity (default); "
+                         "d5-95: the D5-95 significant duration, from the zero crossing at or before D5")
     ap.add_argument("--max-seconds", type=float, default=1800.0)
     ap.add_argument("--numberer", default="ParallelRCM", choices=["ParallelRCM", "ParallelPlain"])
     ap.add_argument("--integrator", default="Newmark", choices=list(INTEGRATORS))
@@ -127,9 +137,17 @@ def main() -> int:
     ap.add_argument("--no-resume", action="store_true",
                     help="rerun configurations already recorded in --out (default: skip them)")
     args = ap.parse_args()
-    global NUMBERER, INTEGRATOR, TRACE, SLAB
+    global NUMBERER, INTEGRATOR, TRACE, SLAB, START
     NUMBERER, INTEGRATOR, TRACE, SLAB = args.numberer, args.integrator, args.trace, args.slab
     motion = bs.Motion.from_file(args.motion, args.motion_dt)
+    if args.window == "d5-95":
+        START, end = motion.significant_window()
+        full = int(round((end - START) / bs.DYN_DT))
+        args.steps = full if args.steps is None else min(args.steps, full)
+        print(f"D5-95 window {START:.3f}-{end:.3f} s: {full} steps of {bs.DYN_DT} s; running {args.steps}",
+              flush=True)
+    elif args.steps is None:
+        args.steps = 200
     env = dict(os.environ, I_MPI_PIN="on", I_MPI_PIN_CELL="core", I_MPI_FABRICS="shm",
                OMP_NUM_THREADS="1", MKL_NUM_THREADS="1")
     if os.name != "nt":
@@ -137,7 +155,7 @@ def main() -> int:
         # instead of launching them through Slurm.
         env.setdefault("I_MPI_HYDRA_BOOTSTRAP", "fork")
     meta = {**bs.run_stamp(), "platform": platform.platform(), "exe": args.exe,
-            "motion": motion.name, "start_time": motion.strong_start(),
+            "motion": motion.name, "start_time": START if START is not None else motion.strong_start(),
             "steps": args.steps, "dyn_test": bs.DYN_TEST, "distributed": True, "tcl": True}
     # resume after a requeue: runs recorded under an equivalent meta line are not repeated
     same = {k: meta[k] for k in ("exe", "motion", "start_time", "steps", "dyn_test")}
