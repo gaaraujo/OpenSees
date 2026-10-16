@@ -21,6 +21,7 @@
 #include <OPS_Globals.h>
 #include <mpi.h>
 #include <dmumps_c.h>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -140,7 +141,11 @@ private:
         m_id.ICNTL(5) = 0;   // assembled input
         m_id.ICNTL(18) = 0;  // centralized on the host
         m_id.ICNTL(7) = 7;   // automatic ordering
-        m_id.ICNTL(14) = 20;
+        // Starting workspace relaxation (percent); OPS_MUMPS_CSR_ICNTL14 overrides the default 20. Read on
+        // every rank (setControls runs in each rank's constructor): the retry loop in factorize() reads the
+        // global INFOG, so all ranks must start from the same ICNTL(14).
+        const char *icntl14 = std::getenv("OPS_MUMPS_CSR_ICNTL14");
+        m_id.ICNTL(14) = icntl14 ? std::atoi(icntl14) : 20;
     }
 
     int report(const char *phase) const
