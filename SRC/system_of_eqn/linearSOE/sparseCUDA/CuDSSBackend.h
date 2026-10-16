@@ -120,6 +120,22 @@ public:
     int solve(void *rhs, void *solution, int numRhs = 1);
 
     /**
+     * Column stride (leading dimension, in values) of the dense RHS and solution
+     * blocks for  numRhs right-hand sides. One RHS:  numRows. Several:
+     *  numRows rounded up so that every column starts on a 16-byte boundary
+     * (cuDSS faults with "misaligned address" when column 2 of a double block
+     * starts at an odd offset). Callers lay out multi-RHS buffers with this stride.
+     */
+    static int64_t denseLeadingDim(int64_t numRows, int numRhs, std::size_t valueBytes)
+    {
+        if (numRhs <= 1) {
+            return numRows;
+        }
+        const int64_t perAlign = static_cast<int64_t>(16 / valueBytes);
+        return (numRows + perAlign - 1) / perAlign * perAlign;
+    }
+
+    /**
      * Highest completed setup milestone (ordered for >= comparisons).
      * Names mirror cuDSS execute phases in cudssPhase_t; PatternBound is the
      * pre-ANALYSIS state used while importing shared symbolic data.

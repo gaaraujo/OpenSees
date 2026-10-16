@@ -21,8 +21,28 @@
 
 #include "CuDSSBackend.h"
 #include <OPS_Globals.h>
+#include <cstdint>
 #include <stdexcept>
 #include <vector>
+
+namespace {
+// A multi-RHS block must start on a 16-byte boundary; its later columns are kept
+// aligned by denseLeadingDim. Checked here so that a misaligned block fails with a
+// message instead of an asynchronous "misaligned address" at the next stream sync.
+bool denseBlockAligned(const char *where, const void *rhs, const void *solution, int numRhs)
+{
+    if (numRhs <= 1) {
+        return true;
+    }
+    const bool ok = reinterpret_cast<std::uintptr_t>(rhs) % 16 == 0 &&
+                    reinterpret_cast<std::uintptr_t>(solution) % 16 == 0;
+    if (!ok) {
+        opserr << "ERROR CuDSSBackend::" << where << "() - " << numRhs
+               << "-RHS block is not 16-byte aligned\n";
+    }
+    return ok;
+}
+}  // namespace
 
 #if CUDSS_VERSION < 800
 #error "OpenSees-CUDA requires cuDSS 0.8.0 or later"
@@ -262,7 +282,8 @@ int CuDSSBackend::bindPattern(int numRows, int numNnz, int *rowPtr, int *colIdx,
                                          m_OffsetType, m_IndexType, m_ValueType, mtype, mview, CUDSS_BASE_ZERO),
                     "create cuDSS CSR matrix");
 
-    if (recreateDenseDescriptors(numRows, rhs, solution, numRhs) != 0) {
+    if (!denseBlockAligned("bindStructure", rhs, solution, numRhs) ||
+        recreateDenseDescriptors(numRows, rhs, solution, numRhs) != 0) {
         return -1;
     }
 
@@ -388,13 +409,13 @@ int CuDSSBackend::recreateDenseDescriptors(int numRows, void *rhs, void *solutio
     m_numRows = numRows;
     m_numRhs = numRhs;
 
-    cuDSSCheckError(cudssMatrixCreateDn(&m_RHS, static_cast<int64_t>(numRows), numRhs,
-                                        static_cast<int64_t>(numRows), rhs, m_ValueType,
+    const std::size_t valueBytes = (m_ValueType == CUDSS_R_32F) ? sizeof(float) : sizeof(double);
+    const int64_t ld = denseLeadingDim(numRows, numRhs, valueBytes);
+    cuDSSCheckError(cudssMatrixCreateDn(&m_RHS, static_cast<int64_t>(numRows), numRhs, ld, rhs, m_ValueType,
                                         CUDSS_LAYOUT_COL_MAJOR),
                     "create cuDSS RHS");
-    cuDSSCheckError(cudssMatrixCreateDn(&m_Solution, static_cast<int64_t>(numRows), numRhs,
-                                        static_cast<int64_t>(numRows), solution, m_ValueType,
-                                        CUDSS_LAYOUT_COL_MAJOR),
+    cuDSSCheckError(cudssMatrixCreateDn(&m_Solution, static_cast<int64_t>(numRows), numRhs, ld, solution,
+                                        m_ValueType, CUDSS_LAYOUT_COL_MAJOR),
                     "create cuDSS solution");
     return 0;
 }
@@ -416,6 +437,9 @@ int CuDSSBackend::factorize(void *values, void *rhs, void *solution, int numRhs)
         return -1;
     }
 
+    if (!denseBlockAligned("factorize", rhs, solution, numRhs)) {
+        return -1;
+    }
     if (numRhs != m_numRhs) {
         if (recreateDenseDescriptors(m_numRows, rhs, solution, numRhs) != 0) {
             return -1;
@@ -441,6 +465,9 @@ int CuDSSBackend::refactorize(void *values, void *rhs, void *solution, int numRh
         return -1;
     }
 
+    if (!denseBlockAligned("refactorize", rhs, solution, numRhs)) {
+        return -1;
+    }
     if (numRhs != m_numRhs) {
         if (recreateDenseDescriptors(m_numRows, rhs, solution, numRhs) != 0) {
             return -1;
@@ -464,6 +491,9 @@ int CuDSSBackend::solve(void *rhs, void *solution, int numRhs)
         return -1;
     }
 
+    if (!denseBlockAligned("solve", rhs, solution, numRhs)) {
+        return -1;
+    }
     if (numRhs != m_numRhs) {
         if (recreateDenseDescriptors(m_numRows, rhs, solution, numRhs) != 0) {
             return -1;
