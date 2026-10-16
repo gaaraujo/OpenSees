@@ -142,6 +142,7 @@ template<typename T>
 struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
     int size = 0;
     int alphaNumRhs = 2;  // 1 when alphaM ~= alphaF, or when incrementalAccel (alpha_3 unused)
+    int alphaLd = 0;      // column stride of d_alphaRhs / d_alphaSol (CuDSSBackend::denseLeadingDim)
 
     thrust::device_vector<T> d_state_cur;    // [U | Udot | Uddot]
     thrust::device_vector<T> d_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
@@ -181,8 +182,9 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         d_state_prev.assign(motionSize, zero);
         d_w2.assign(n, zero);
         d_put.assign(n, zero);
-        d_alphaRhs.assign(alphaNumRhs * n, zero);
-        d_alphaSol.assign(alphaNumRhs * n, zero);
+        alphaLd = static_cast<int>(CuDSSBackend::denseLeadingDim(n, alphaNumRhs, sizeof(T)));
+        d_alphaRhs.assign(static_cast<std::size_t>(alphaNumRhs) * alphaLd, zero);
+        d_alphaSol.assign(static_cast<std::size_t>(alphaNumRhs) * alphaLd, zero);
         h_put.assign(static_cast<std::size_t>(n), 0.0);
     }
 
@@ -209,13 +211,16 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
 
     void ensureAlphaBuffers(int alphaNumRhsIn) override
     {
-        if (alphaNumRhsIn == alphaNumRhs && static_cast<int>(d_alphaSol.size()) == alphaNumRhs * size) {
+        const int ld = static_cast<int>(CuDSSBackend::denseLeadingDim(size, alphaNumRhsIn, sizeof(T)));
+        if (alphaNumRhsIn == alphaNumRhs && alphaLd == ld &&
+            d_alphaSol.size() == static_cast<std::size_t>(alphaNumRhs) * ld) {
             return;
         }
         alphaNumRhs = alphaNumRhsIn;
+        alphaLd = ld;
         const T zero = static_cast<T>(0.0);
-        d_alphaRhs.assign(alphaNumRhs * size, zero);
-        d_alphaSol.assign(alphaNumRhs * size, zero);
+        d_alphaRhs.assign(static_cast<std::size_t>(alphaNumRhs) * alphaLd, zero);
+        d_alphaSol.assign(static_cast<std::size_t>(alphaNumRhs) * alphaLd, zero);
     }
 
     void destroySolvers() override
@@ -446,7 +451,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
         T *dUdot = devUdot();
         T *dUddot = devUddot();
         T *dAlphaSol1 = thrust::raw_pointer_cast(d_alphaSol.data());
-        T *dAlphaSol3 = alphaNumRhs > 1 ? dAlphaSol1 + size : nullptr;
+        T *dAlphaSol3 = alphaNumRhs > 1 ? dAlphaSol1 + alphaLd : nullptr;
         T *dAlphaRhs = thrust::raw_pointer_cast(d_alphaRhs.data());
 
         const T dt = static_cast<T>(integrator->deltaT);
@@ -460,7 +465,7 @@ struct ImplT_TP : CudaExplicitAlpha_TP::ImplBase {
 
         applyM(dUtdotdot, dAlphaRhs);
         if (needAlpha3) {
-            matA->spmv(dUtdotdot, dAlphaRhs + size);
+            matA->spmv(dUtdotdot, dAlphaRhs + alphaLd);
             if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
                 return -5;
             }
