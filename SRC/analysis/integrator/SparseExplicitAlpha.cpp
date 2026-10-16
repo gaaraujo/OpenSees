@@ -62,9 +62,19 @@ bool parseSparseExplicitAlphaOptions(SparseExplicitAlpha::Options &opts)
             opts.initAccel = true;
         } else if (strcmp(tok, "-noSecondPass") == 0) {
             opts.noSecondPass = true;
+        } else if (strcmp(tok, "-tangentAtStart") == 0) {
+            opts.tangentAtStart = true;
+        } else if (strcmp(tok, "-stiffnessFactor") == 0) {
+            int one = 1;
+            if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
+                !(opts.stiffnessFactor > 0.0)) {
+                opserr << "WARNING SparseExplicitAlpha family - -stiffnessFactor needs a positive value\n";
+                return false;
+            }
         } else {
             opserr << "WARNING SparseExplicitAlpha family - unknown flag " << tok
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel> <-noSecondPass>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel> <-noSecondPass>"
+                      " <-tangentAtStart> <-stiffnessFactor s>\n";
             return false;
         }
     }
@@ -153,6 +163,8 @@ SparseExplicitAlpha::SparseExplicitAlpha(double _alphaF, double _alphaM, double 
       alphaM(_alphaM), alphaF(_alphaF), beta(_beta), gamma(_gamma),
       updElemDisp(opts.updElemDisp),
       noSecondPass(opts.noSecondPass),
+      tangentAtStart(opts.tangentAtStart),
+      stiffnessFactor(opts.stiffnessFactor),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),
@@ -382,10 +394,13 @@ int SparseExplicitAlpha::formEleTangent(FE_Element *theEle)
     if (operatorsBuilt)
         return 0;
     theEle->zeroTangent();
-    if (statusFlag == CURRENT_TANGENT)
-        theEle->addKtToTang(c1);
-    else if (statusFlag == INITIAL_TANGENT)
-        theEle->addKiToTang(c1);
+    // -tangentAtStart: K from the current tangent at the moment the operators are formed (e.g. the
+    // post-gravity state) instead of the initial tangent; -stiffnessFactor s: s*K in every operator.
+    const int kFlag = (tangentAtStart && statusFlag == INITIAL_TANGENT) ? CURRENT_TANGENT : statusFlag;
+    if (kFlag == CURRENT_TANGENT)
+        theEle->addKtToTang(c1 * stiffnessFactor);
+    else if (kFlag == INITIAL_TANGENT)
+        theEle->addKiToTang(c1 * stiffnessFactor);
     theEle->addCtoTang(c2);
     theEle->addMtoTang(c3);
     return 0;
@@ -743,7 +758,7 @@ const Vector &SparseExplicitAlpha::getVel() { return *Ualphadot; }  // alpha-lev
 
 int SparseExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
 {
-    Vector data(9);
+    Vector data(11);
     data(0) = alphaM;
     data(1) = alphaF;
     data(2) = beta;
@@ -753,13 +768,15 @@ int SparseExplicitAlpha::sendSelf(int cTag, Channel &theChannel)
     data(6) = useAlphaCloseCheck ? 1.0 : 0.0;
     data(7) = initAccel ? 1.0 : 0.0;
     data(8) = noSecondPass ? 1.0 : 0.0;
+    data(9) = tangentAtStart ? 1.0 : 0.0;
+    data(10) = stiffnessFactor;
     return theChannel.sendVector(this->getDbTag(), cTag, data);
 }
 
 int SparseExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroker &theBroker)
 {
     (void)theBroker;
-    Vector data(9);
+    Vector data(11);
     if (theChannel.recvVector(this->getDbTag(), cTag, data) < 0)
         return -1;
     alphaM = data(0);
@@ -771,6 +788,8 @@ int SparseExplicitAlpha::recvSelf(int cTag, Channel &theChannel, FEM_ObjectBroke
     useAlphaCloseCheck = data(6) > 0.5;
     initAccel = data(7) > 0.5;
     noSecondPass = data(8) > 0.5;
+    tangentAtStart = data(9) > 0.5;
+    stiffnessFactor = data(10);
     operatorsBuilt = false;
     return 0;
 }
@@ -779,7 +798,8 @@ void SparseExplicitAlpha::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
     s << "SparseExplicitAlpha alphaF=" << alphaF << " alphaM=" << alphaM << " initAccel=" << (initAccel ? 1 : 0)
-      << " noSecondPass=" << (noSecondPass ? 1 : 0) << endln;
+      << " noSecondPass=" << (noSecondPass ? 1 : 0) << " tangentAtStart=" << (tangentAtStart ? 1 : 0)
+      << " stiffnessFactor=" << stiffnessFactor << endln;
 }
 
 int SparseExplicitAlpha::revertToStart()

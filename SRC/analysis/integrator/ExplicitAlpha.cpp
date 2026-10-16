@@ -40,10 +40,14 @@
 namespace {
 
 bool s_noSecondPass = false;
+bool s_tangentAtStart = false;
+double s_stiffnessFactor = 1.0;
 template <class T> T *markOnePass(T *p)
 {
-    if (p != 0)
+    if (p != 0) {
         p->setNoSecondPass(s_noSecondPass);
+        p->setOperatorOptions(s_tangentAtStart, s_stiffnessFactor);
+    }
     return p;
 }
 
@@ -55,6 +59,8 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
     useAlphaCloseCheck = false;
     initAccel = false;
     s_noSecondPass = false;
+    s_tangentAtStart = false;
+    s_stiffnessFactor = 1.0;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -70,10 +76,19 @@ bool parseExplicitAlphaOptions(bool &updElemDisp, bool &incrementalAccel, bool &
             initAccel = true;
         } else if (strcmp(argvLoc, "-noSecondPass") == 0) {
             s_noSecondPass = true;
+        } else if (strcmp(argvLoc, "-tangentAtStart") == 0) {
+            s_tangentAtStart = true;
+        } else if (strcmp(argvLoc, "-stiffnessFactor") == 0) {
+            int one = 1;
+            if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &s_stiffnessFactor) != 0 ||
+                !(s_stiffnessFactor > 0.0)) {
+                opserr << "WARNING ExplicitAlpha family - -stiffnessFactor needs a positive value\n";
+                return false;
+            }
         } else {
             opserr << "WARNING ExplicitAlpha family - unknown flag " << argvLoc
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
-                      " <-noSecondPass>\n";
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s>\n";
             return false;
         }
     }
@@ -582,10 +597,13 @@ int ExplicitAlpha::formEleTangent(FE_Element *theEle)
 {
     theEle->zeroTangent();
 
-    if (statusFlag == CURRENT_TANGENT)
-        theEle->addKtToTang(c1);
-    else if (statusFlag == INITIAL_TANGENT)
-        theEle->addKiToTang(c1);
+    // -tangentAtStart: K from the current tangent at the moment the operators are formed (e.g. the
+    // post-gravity state) instead of the initial tangent; -stiffnessFactor s: s*K in every operator.
+    const int kFlag = (tangentAtStart && statusFlag == INITIAL_TANGENT) ? CURRENT_TANGENT : statusFlag;
+    if (kFlag == CURRENT_TANGENT)
+        theEle->addKtToTang(c1 * stiffnessFactor);
+    else if (kFlag == INITIAL_TANGENT)
+        theEle->addKiToTang(c1 * stiffnessFactor);
 
     theEle->addCtoTang(c2);
     theEle->addMtoTang(c3);

@@ -42,6 +42,8 @@ public:
         bool useAlphaCloseCheck = false;
         bool initAccel = false;
         bool noSecondPass = false;
+        bool tangentAtStart = false;   // -tangentAtStart (see formEleTangent)
+        double stiffnessFactor = 1.0;  // -stiffnessFactor s (see formEleTangent)
     };
 
     CudaExplicitAlpha();
@@ -77,6 +79,8 @@ protected:
     double gamma;
     bool updElemDisp;
     bool noSecondPass;  // -noSecondPass (see update())
+    bool tangentAtStart;     // -tangentAtStart (see formEleTangent)
+    double stiffnessFactor;  // -stiffnessFactor (see formEleTangent)
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     bool initAccel;     // -initAccel: start from the equilibrium acceleration M a0 = p - C v0 - f

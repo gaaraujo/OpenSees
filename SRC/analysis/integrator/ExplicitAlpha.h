@@ -52,6 +52,7 @@ class ExplicitAlpha : public TransientIntegrator
 {
 public:
     void setNoSecondPass(bool f) { noSecondPass = f; }
+    void setOperatorOptions(bool tas, double sf) { tangentAtStart = tas; stiffnessFactor = sf; }
     ExplicitAlpha();
     ExplicitAlpha(double alphaF, double alphaM, double gamma, double beta,
                   bool updElemDisp = false, bool incrementalAccel = false,
@@ -100,6 +101,8 @@ protected:
 
     bool updElemDisp;
     bool noSecondPass = false;  // -noSecondPass (see update())
+    bool tangentAtStart = false;   // -tangentAtStart (see formEleTangent)
+    double stiffnessFactor = 1.0;  // -stiffnessFactor s (see formEleTangent)
     /** If true, trial accel is Uddot_n and the linear solve returns Delta Uddot. */
     bool incrementalAccel;
     /** If true, use the alpha-close shortcut when \f$|\alpha_M-\alpha_F|\le\f$ tolerance. */

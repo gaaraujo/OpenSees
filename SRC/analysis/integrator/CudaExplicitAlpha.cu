@@ -684,9 +684,19 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.initAccel = true;
         } else if (strcmp(tok, "-noSecondPass") == 0) {
             opts.noSecondPass = true;
+        } else if (strcmp(tok, "-tangentAtStart") == 0) {
+            opts.tangentAtStart = true;
+        } else if (strcmp(tok, "-stiffnessFactor") == 0) {
+            int one = 1;
+            if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
+                !(opts.stiffnessFactor > 0.0)) {
+                opserr << "WARNING CudaExplicitAlpha family - -stiffnessFactor needs a positive value\n";
+                return false;
+            }
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s>\n";
             return false;
         }
     }
@@ -797,6 +807,8 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       gamma(_gamma),
       updElemDisp(opts.updElemDisp),
       noSecondPass(opts.noSecondPass),
+      tangentAtStart(opts.tangentAtStart),
+      stiffnessFactor(opts.stiffnessFactor),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),
@@ -915,10 +927,13 @@ int CudaExplicitAlpha::formEleTangent(FE_Element *theEle)
         return 0;
     }
     theEle->zeroTangent();
-    if (statusFlag == CURRENT_TANGENT) {
-        theEle->addKtToTang(c1);
-    } else if (statusFlag == INITIAL_TANGENT) {
-        theEle->addKiToTang(c1);
+    // -tangentAtStart: K from the current tangent at the moment the operators are formed (e.g. the
+    // post-gravity state) instead of the initial tangent; -stiffnessFactor s: s*K in every operator.
+    const int kFlag = (tangentAtStart && statusFlag == INITIAL_TANGENT) ? CURRENT_TANGENT : statusFlag;
+    if (kFlag == CURRENT_TANGENT) {
+        theEle->addKtToTang(c1 * stiffnessFactor);
+    } else if (kFlag == INITIAL_TANGENT) {
+        theEle->addKiToTang(c1 * stiffnessFactor);
     }
     theEle->addCtoTang(c2);
     theEle->addMtoTang(c3);
@@ -1373,7 +1388,8 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
     s << "CudaExplicitAlpha alphaF=" << alphaF << " alphaM=" << alphaM
-      << " initAccel=" << (initAccel ? 1 : 0);
+      << " initAccel=" << (initAccel ? 1 : 0) << " noSecondPass=" << (noSecondPass ? 1 : 0)
+      << " tangentAtStart=" << (tangentAtStart ? 1 : 0) << " stiffnessFactor=" << stiffnessFactor;
     s << endln;
 }
 
