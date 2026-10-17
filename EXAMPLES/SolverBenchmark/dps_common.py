@@ -128,6 +128,7 @@ class CuPyCGSolver:
 
     def __init__(self, rtol: float = 1.0e-7, atol: float = 1.0e-12, maxiter=None):
         import cupy as cp
+        import cupyx.scipy.sparse  # noqa: F401
         import cupyx.scipy.sparse.linalg  # noqa: F401
 
         self._cp = cp
@@ -138,6 +139,7 @@ class CuPyCGSolver:
 
     def solve(self, **kwargs):
         cp = self._cp
+        import cupyx.scipy.sparse
         import cupyx.scipy.sparse.linalg as cpsla
 
         num_eqn = kwargs["num_eqn"]
@@ -148,7 +150,7 @@ class CuPyCGSolver:
         vals = np.frombuffer(kwargs["values"], dtype=np.float64, count=nnz)
 
         if matrix_status == "STRUCTURE_CHANGED" or self.A is None:
-            self.A = cp.sparse.csr_matrix(
+            self.A = cupyx.scipy.sparse.csr_matrix(
                 (cp.asarray(vals), cp.asarray(idx), cp.asarray(indptr)),
                 shape=(num_eqn, num_eqn),
             )
@@ -157,7 +159,7 @@ class CuPyCGSolver:
 
         rhs_gpu = cp.asarray(np.frombuffer(kwargs["rhs"], dtype=np.float64, count=num_eqn))
         x_gpu, info = cpsla.cg(
-            self.A, rhs_gpu, tol=self.rtol, atol=self.atol, maxiter=self.maxiter
+            self.A, rhs_gpu, rtol=self.rtol, atol=self.atol, maxiter=self.maxiter
         )
         np.frombuffer(kwargs["x"], dtype=np.float64, count=num_eqn)[:] = cp.asnumpy(x_gpu)
         return -int(info)

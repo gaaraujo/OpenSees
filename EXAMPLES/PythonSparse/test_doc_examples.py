@@ -44,7 +44,9 @@ except Exception:  # noqa: BLE001
 
 
 # ----------------------------------------------------------------------------
-# Verbatim from the documentation (system PythonSparse page)
+# From the documentation (system PythonSparse page). CuPyCGSolver includes the
+# fix for current CuPy proposed for the documentation: cupyx.scipy.sparse
+# instead of cp.sparse, and rtol= instead of the removed tol= keyword.
 # ----------------------------------------------------------------------------
 
 if HAVE_CUPY:
@@ -70,7 +72,7 @@ if HAVE_CUPY:
             vals = np.frombuffer(values, dtype=np.float64, count=nnz)
 
             if matrix_status == 'STRUCTURE_CHANGED' or self.A is None:
-                self.A = cp.sparse.csr_matrix(
+                self.A = cupyx.scipy.sparse.csr_matrix(
                     (cp.asarray(vals), cp.asarray(idx), cp.asarray(indptr)),
                     shape=(num_eqn, num_eqn)
                 )
@@ -79,7 +81,7 @@ if HAVE_CUPY:
 
             rhs_gpu = cp.asarray(np.frombuffer(rhs, dtype=np.float64, count=num_eqn))
             x_gpu, info = cupyx.scipy.sparse.linalg.cg(
-                self.A, rhs_gpu, tol=self.rtol, atol=self.atol, maxiter=self.maxiter
+                self.A, rhs_gpu, rtol=self.rtol, atol=self.atol, maxiter=self.maxiter
             )
 
             np.frombuffer(x, dtype=np.float64, count=num_eqn)[:] = cp.asnumpy(x_gpu)
@@ -114,43 +116,6 @@ class SciPyspSolveSolver:
         x_arr = np.frombuffer(x, dtype=np.float64, count=num_eqn)
         x_arr[:] = self._solve_func(rhs_arr)
         return 0
-
-
-if HAVE_CUPY:
-    class CuPyCGSolverFixed(CuPyCGSolver):
-        """The documented example with the two fixes current CuPy needs:
-        ``cupyx.scipy.sparse`` instead of ``cp.sparse``, and ``rtol=`` instead of
-        the removed ``tol=`` keyword. Nothing else changes."""
-
-        def solve(self, **kwargs):
-            index_ptr = kwargs['index_ptr']
-            indices = kwargs['indices']
-            values = kwargs['values']
-            rhs = kwargs['rhs']
-            x = kwargs['x']
-            num_eqn = kwargs['num_eqn']
-            nnz = kwargs['nnz']
-            matrix_status = kwargs['matrix_status']
-
-            indptr = np.frombuffer(index_ptr, dtype=np.int32, count=num_eqn + 1)
-            idx = np.frombuffer(indices, dtype=np.int32, count=nnz)
-            vals = np.frombuffer(values, dtype=np.float64, count=nnz)
-
-            if matrix_status == 'STRUCTURE_CHANGED' or self.A is None:
-                self.A = cupyx.scipy.sparse.csr_matrix(
-                    (cp.asarray(vals), cp.asarray(idx), cp.asarray(indptr)),
-                    shape=(num_eqn, num_eqn)
-                )
-            elif matrix_status == 'COEFFICIENTS_CHANGED':
-                self.A.data[:] = cp.asarray(vals)
-
-            rhs_gpu = cp.asarray(np.frombuffer(rhs, dtype=np.float64, count=num_eqn))
-            x_gpu, info = cupyx.scipy.sparse.linalg.cg(
-                self.A, rhs_gpu, rtol=self.rtol, atol=self.atol, maxiter=self.maxiter
-            )
-
-            np.frombuffer(x, dtype=np.float64, count=num_eqn)[:] = cp.asnumpy(x_gpu)
-            return -int(info)
 
 
 # ----------------------------------------------------------------------------
@@ -264,11 +229,7 @@ def main() -> int:
     ref_ok, ref = static_tip_disp(("Mumps",) if DISTRIBUTED and NP > 1 else ("UmfPack",))
     cases = [("SciPyspSolveSolver", SciPyspSolveSolver())]
     if HAVE_CUPY:
-        # Known documentation bug with CuPy >= 13 (cp.sparse, tol=): reported, not fatal.
-        cases.append(("CuPyCGSolver [doc, known bug]", CuPyCGSolver(rtol=1e-12, atol=1e-14,
-                                                                   maxiter=5000)))
-        cases.append(("CuPyCGSolverFixed", CuPyCGSolverFixed(rtol=1e-12, atol=1e-14,
-                                                             maxiter=5000)))
+        cases.append(("CuPyCGSolver", CuPyCGSolver(rtol=1e-12, atol=1e-14, maxiter=5000)))
     for name, solver in cases:
         try:
             ok, u = static_tip_disp((SYSTEM, {"solver": solver, "scheme": "CSR"}))
@@ -301,7 +262,7 @@ def main() -> int:
         for name, outcome in results:
             print(f"  {name:30s} {outcome}")
     ops.wipe()
-    return 0 if all(o == "ok" or "known bug" in n for n, o in results) else 1
+    return 0 if all(o == "ok" for _, o in results) else 1
 
 
 if __name__ == "__main__":
