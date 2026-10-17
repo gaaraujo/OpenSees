@@ -46,6 +46,7 @@
 #include <LinearSOE.h>
 #include <LinearSOESolver.h>
 #include <Vector.h>
+#include <SparseAssemblyCache.h>
 #include <vector>
 #include "CudaUtils.h"
 
@@ -324,6 +325,11 @@ protected:
     std::vector<double> m_pageableX;
     std::vector<double> m_pageableB;
 
+    // Value slots of addA() entries, in call order (cleared when the structure changes).
+    SparseSlotCache m_assemblyCache;
+    // Column indices of each (block) row are sorted (binary search in findValueSlot).
+    bool m_colsSorted = false;
+
     // Set size helper methods
     int buildStandardCSR(Graph &theGraph);
     int buildBlockCSR(Graph &theGraph);
@@ -332,10 +338,10 @@ protected:
     int estimateBlockSize(Graph &theGraph, int nnz, double efficiency = DEFAULT_EFFICIENCY_THRESHOLD);
     int fillPaddedDiagonals(double value = 0.0, bool autoCompute = true);
     
-    // Helper methods for assembly
-    int addAMatrixElement(int globalRow, int globalCol, double value);
-    int addAMatrixElementBlock(int globalRow, int globalCol, double value);
-    int addAMatrixElementStandard(int globalRow, int globalCol, double value);
+    // Assembly helpers: value slot of (row, col) in m_hostAValues, or -1 if not in the
+    // pattern; structure bookkeeping after the host CSR/BCSR indices change.
+    int findValueSlot(int globalRow, int globalCol) const;
+    void hostStructureChanged(void);
            
     // Validation methods
     bool isValidBlockSize(int blockSize) const;

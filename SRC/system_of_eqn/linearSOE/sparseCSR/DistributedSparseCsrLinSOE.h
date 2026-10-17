@@ -19,6 +19,7 @@
 #define DistributedSparseCsrLinSOE_h
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <cstdint>
 #include <unordered_map>
 
@@ -82,9 +83,7 @@ private:
     void ensureWorkArea(int size);
     int addAWorker(const Matrix &m, const ID &id, double fact);
     int buildMergeIndexMap(void);
-    int mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip);
-    int sendTripletArrays(Channel *theChannel);
-    int recvAndMergeTriplets(Channel *theChannel, int nTrip, bool merge);
+    int recvAndMergeTriplets(Channel *theChannel, int worker, int header, bool merge);
 
     SparseCsrLinSOE *theCsrSOE;
 
@@ -102,8 +101,9 @@ private:
     Vector *myVectBHeader;
     int myBsize;
 
-    std::unordered_map<uint64_t, double> tripletMap;  // worker: assembled (row, col) contributions
+    SparseLocalTriplets localTriplets;                // worker: assembled (row, col) contributions
     std::unordered_map<uint64_t, int> mergeIndexMap;  // rank 0: (row, col) -> offset in A values
+    SparseRootScatter rootScatter;                    // rank 0: per worker, slot -> offset in A values
 
     bool globalRhsReady;
 };

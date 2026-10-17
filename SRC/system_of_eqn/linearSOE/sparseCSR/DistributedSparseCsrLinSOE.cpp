@@ -107,17 +107,7 @@ DistributedSparseCsrLinSOE::addAWorker(const Matrix &m, const ID &id, double fac
         opserr << "WARNING DistributedSparseCsrLinSOE::addA() - Matrix and ID not of similar sizes\n";
         return -1;
     }
-    for (int i = 0; i < idSize; ++i) {
-        const int row = id(i);
-        if (row < 0 || row >= myBsize)
-            continue;
-        for (int j = 0; j < idSize; ++j) {
-            const int col = id(j);
-            if (col < 0 || col >= myBsize)
-                continue;
-            tripletMap[packRC(row, col)] += (fact == 1.0) ? m(i, j) : fact * m(i, j);
-        }
-    }
+    localTriplets.add(m, id, fact, myBsize);
     if (theCsrSOE->getMatrixStatus() == SparseCsrLinSOE::MatrixStatus::UNCHANGED)
         theCsrSOE->setMatrixStatus(SparseCsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED);
     return 0;
@@ -138,61 +128,16 @@ DistributedSparseCsrLinSOE::buildMergeIndexMap(void)
     return 0;
 }
 
+// Rank 0: receive what one worker announced with header (SparseLocalTriplets: 0 nothing,
+// n > 0 full triplets, -(n + 2) values only); merge unless merge is false (drain only).
 int
-DistributedSparseCsrLinSOE::mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip)
+DistributedSparseCsrLinSOE::recvAndMergeTriplets(Channel *theChannel, int worker, int header, bool merge)
 {
-    double *A = theCsrSOE->getAValuesData();
-    if (A == nullptr)
-        return -1;
-    for (int i = 0; i < nTrip; ++i) {
-        const auto it = mergeIndexMap.find(packRC(rows[i], cols[i]));
-        if (it == mergeIndexMap.end()) {
-            opserr << "WARNING DistributedSparseCsrLinSOE - no CSR entry for (" << rows[i] << ", " << cols[i] << ")\n";
-            return -1;
-        }
-        A[it->second] += vals[i];
-    }
-    return 0;
-}
-
-// Worker: the triplet arrays only (the count travels separately).
-int
-DistributedSparseCsrLinSOE::sendTripletArrays(Channel *theChannel)
-{
-    const int nTrip = static_cast<int>(tripletMap.size());
-    if (nTrip == 0)
-        return 0;
-    ID rows(nTrip);
-    ID cols(nTrip);
-    Vector vals(nTrip);
-    int k = 0;
-    for (const auto &entry : tripletMap) {
-        rows(k) = static_cast<int>(entry.first >> 32);
-        cols(k) = static_cast<int>(entry.first & 0xffffffffu);
-        vals(k) = entry.second;
-        ++k;
-    }
-    if (theChannel->sendID(0, 0, rows) < 0 || theChannel->sendID(0, 0, cols) < 0 ||
-        theChannel->sendVector(0, 0, vals) < 0)
-        return -1;
-    return 0;
-}
-
-// Rank 0: receive nTrip triplets from one worker; merge them unless merge is false (drain only).
-int
-DistributedSparseCsrLinSOE::recvAndMergeTriplets(Channel *theChannel, int nTrip, bool merge)
-{
-    if (nTrip <= 0)
-        return 0;
-    ID rows(nTrip);
-    ID cols(nTrip);
-    Vector vals(nTrip);
-    if (theChannel->recvID(0, 0, rows) < 0 || theChannel->recvID(0, 0, cols) < 0 ||
-        theChannel->recvVector(0, 0, vals) < 0)
-        return -1;
-    if (merge && mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0)
-        return -1;
-    return 0;
+    auto offsetOf = [this](int row, int col) -> int {
+        const auto it = mergeIndexMap.find(packRC(row, col));
+        return it == mergeIndexMap.end() ? -1 : it->second;
+    };
+    return rootScatter.recvAndMerge(*theChannel, worker, header, merge, theCsrSOE->getAValuesData(), offsetOf);
 }
 
 int
@@ -206,7 +151,8 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
 {
     if (theCsrSOE == nullptr)
         return -1;
-    tripletMap.clear();
+    localTriplets.reset();
+    rootScatter.reset(numChannels);
     mergeIndexMap.clear();
 
     if (processID != 0) {
@@ -304,7 +250,7 @@ DistributedSparseCsrLinSOE::setB(const Vector &v, double fact)
 void
 DistributedSparseCsrLinSOE::zeroA(void)
 {
-    tripletMap.clear();
+    localTriplets.zero();
     if (theCsrSOE != nullptr)
         theCsrSOE->zeroA();
 }
@@ -374,7 +320,9 @@ DistributedSparseCsrLinSOE::solve(void)
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        const int nTrip = sendA ? static_cast<int>(tripletMap.size()) : 0;
+        // Triplet count of SparseLocalTriplets::header(): n >= 0 full triplets, or -(n + 2) values
+        // only once rank 0 holds this rank's pattern.
+        const int nTrip = sendA ? localTriplets.header() : 0;
         if (!skipBMerge) {
             // Header after the RHS: -1 if the matrix is unchanged on this rank, else the number of
             // triplets that follow. Rank 0 reads it instead of its own status.
@@ -385,7 +333,7 @@ DistributedSparseCsrLinSOE::solve(void)
             nTripID(0) = nTrip;
             theChannel->sendID(0, 0, nTripID);
         }
-        if (sendA && sendTripletArrays(theChannel) < 0)
+        if (sendA && localTriplets.send(*theChannel) < 0)
             return -1;
         // Distributed MUMPS: join rank 0's factorization and solve of A.
         if (theCsrSOE->isCollectiveSolver())
@@ -415,20 +363,20 @@ DistributedSparseCsrLinSOE::solve(void)
         if (!skipBMerge) {
             theChannel->recvVector(0, 0, remoteBHeader);
             vectB += remoteB;
-            const double header = workArea[myBsize];
-            workerSendsA = header >= 0.0;
-            nTrip = workerSendsA ? static_cast<int>(header) : 0;
+            const int header = static_cast<int>(workArea[myBsize]);
+            workerSendsA = header != -1;
+            nTrip = workerSendsA ? header : 0;
         } else if (sendA) {
             ID nTripID(1);
             theChannel->recvID(0, 0, nTripID);
             nTrip = nTripID(0);
         }
-        if (workerSendsA != sendA || nTrip < 0) {
+        if (workerSendsA != sendA || nTrip == -1) {
             opserr << "WARNING DistributedSparseCsrLinSOE::solve() - matrix status of rank " << j + 1
                    << " differs from rank 0\n";
             result(0) = -1;
         }
-        if (recvAndMergeTriplets(theChannel, nTrip, result(0) == 0) < 0)
+        if (recvAndMergeTriplets(theChannel, j, nTrip, result(0) == 0) < 0)
             result(0) = -1;
     }
 
@@ -479,20 +427,20 @@ DistributedSparseCsrLinSOE::ensureMergedA(void)
         return 0;
     if (processID != 0) {
         ID nTripID(1);
-        nTripID(0) = static_cast<int>(tripletMap.size());
-        if (theChannels[0]->sendID(0, 0, nTripID) < 0 || sendTripletArrays(theChannels[0]) < 0)
+        nTripID(0) = localTriplets.header();
+        if (theChannels[0]->sendID(0, 0, nTripID) < 0 || localTriplets.send(*theChannels[0]) < 0)
             return -1;
-        tripletMap.clear();
+        localTriplets.clearValues();  // rank 0 now holds these contributions
         return 0;
     }
     int status = 0;
     for (int j = 0; j < numChannels; ++j) {
         ID nTripID(1);
-        if (theChannels[j]->recvID(0, 0, nTripID) < 0 || nTripID(0) < 0) {
+        if (theChannels[j]->recvID(0, 0, nTripID) < 0 || nTripID(0) == -1) {
             status = -1;
             continue;
         }
-        if (recvAndMergeTriplets(theChannels[j], nTripID(0), status == 0) < 0)
+        if (recvAndMergeTriplets(theChannels[j], j, nTripID(0), status == 0) < 0)
             status = -1;
     }
     return status;

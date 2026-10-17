@@ -166,6 +166,7 @@ int SparseCsrLinSOE::setSize(Graph &theGraph)
     m_B.setData(m_hostB.empty() ? nullptr : m_hostB.data(), size);
     m_X.setData(m_hostX.empty() ? nullptr : m_hostX.data(), size);
 
+    m_assemblyCache.clear();
     m_matA.reset();
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
     return 0;
@@ -181,24 +182,22 @@ int SparseCsrLinSOE::resizeHostVectors(int numEqn)
     m_hostX.assign(static_cast<std::size_t>(numEqn), 0.0);
     m_B.setData(m_hostB.empty() ? nullptr : m_hostB.data(), numEqn);
     m_X.setData(m_hostX.empty() ? nullptr : m_hostX.data(), numEqn);
+    m_assemblyCache.clear();
     m_matA.reset();
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
     return 0;
 }
 
-int SparseCsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double value)
+// CSR position of (globalRow, globalCol), or -1. The columns of each row are sorted.
+int SparseCsrLinSOE::findValueSlot(int globalRow, int globalCol) const
 {
     const int n = m_X.Size();
     const int *rowPtr = m_csrIndices.data();
     const int *colIdx = rowPtr + n + 1;
-    for (int k = rowPtr[globalRow]; k < rowPtr[globalRow + 1]; ++k) {
-        if (colIdx[k] == globalCol) {
-            m_aValues[k] += value;
-            return 0;
-        }
-    }
-    opserr << "WARNING SparseCsrLinSOE::addA() - no entry for row " << globalRow << ", col " << globalCol << "\n";
-    return -1;
+    const int *begin = colIdx + rowPtr[globalRow];
+    const int *end = colIdx + rowPtr[globalRow + 1];
+    const int *it = std::lower_bound(begin, end, globalCol);
+    return (it != end && *it == globalCol) ? static_cast<int>(it - colIdx) : -1;
 }
 
 int SparseCsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
@@ -210,18 +209,24 @@ int SparseCsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
         opserr << "WARNING SparseCsrLinSOE::addA() - Matrix and ID not of similar sizes\n";
         return -1;
     }
-    for (int i = 0; i < idSize; ++i) {
+    // Search the pattern for each entry the first time; later assemblies replay the
+    // cached value slots (same slots, same order).
+    auto find = [&](int i, int j) -> int {
         const int globalRow = id(i);
-        if (!isValidGlobalIndex(globalRow))
-            continue;
-        for (int j = 0; j < idSize; ++j) {
-            const int globalCol = id(j);
-            if (!isValidGlobalIndex(globalCol))
-                continue;
-            const double v = (fact == 1.0) ? m(i, j) : (fact == -1.0 ? -m(i, j) : fact * m(i, j));
-            if (addAMatrixElement(globalRow, globalCol, v) != 0)
-                return -1;
-        }
+        const int globalCol = id(j);
+        if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol))
+            return SparseSlotCache::SKIP;
+        const int slot = findValueSlot(globalRow, globalCol);
+        return slot < 0 ? SparseSlotCache::MISSING : slot;
+    };
+    m_assemblyCache.setCapacity(8 * m_aValues.size() + (std::size_t(1) << 20));
+    int failedI = 0;
+    int failedJ = 0;
+    if (addWithCache(m_assemblyCache, m, id, fact, false, find, [&]() { return m_aValues.data(); },
+                     &failedI, &failedJ) != 0) {
+        opserr << "WARNING SparseCsrLinSOE::addA() - no entry for row " << id(failedI) << ", col "
+               << id(failedJ) << "\n";
+        return -1;
     }
     if (m_matrixStatus == MatrixStatus::UNCHANGED)
         m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
@@ -276,6 +281,7 @@ int SparseCsrLinSOE::setB(const Vector &v, double fact)
 
 void SparseCsrLinSOE::zeroA(void)
 {
+    m_assemblyCache.rewind();
     std::fill(m_aValues.begin(), m_aValues.end(), 0.0);
     if (m_matrixStatus == MatrixStatus::UNCHANGED)
         m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
