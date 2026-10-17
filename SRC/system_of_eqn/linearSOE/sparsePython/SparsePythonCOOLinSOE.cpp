@@ -43,6 +43,7 @@ SparsePythonCOOLinSOE::getNumEqn(void) const
 void
 SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
 {
+    assemblyCache.clear();
     const int size = theGraph.getNumVertex();
     if (size < 0) {
         opserr << "WARNING: SparsePythonCOOLinSOE::buildCOOPattern - invalid graph size" << endln;
@@ -143,6 +144,7 @@ SparsePythonCOOLinSOE::resizeVectors(int size)
         return -1;
     }
 
+    assemblyCache.clear();
     rowOffsets.clear();
     rowIndices.clear();
     colIndices.clear();
@@ -174,27 +176,24 @@ SparsePythonCOOLinSOE::addA(const Matrix &m, const ID &id, double fact)
 
     const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
     auto colBegin = colIndices.begin();
-    for (int i = 0; i < idSize; ++i) {
+    // Binary search within the row the first time; later assemblies replay the
+    // cached slots.
+    auto find = [&](int i, int j) -> int {
         const int row = id(i);
-        if (row < 0 || row >= size) {
-            continue;
+        const int col = id(j);
+        if (row < 0 || row >= size || col < 0 || col >= size || (lower && col > row)) {
+            return SparseSlotCache::SKIP;
         }
-
         auto beginIt = colBegin + rowOffsets[static_cast<std::size_t>(row)];
         auto endIt = colBegin + rowOffsets[static_cast<std::size_t>(row + 1)];
-
-        for (int j = 0; j < idSize; ++j) {
-            const int col = id(j);
-            if (col < 0 || col >= size || (lower && col > row)) {
-                continue;
-            }
-
-            auto it = std::lower_bound(beginIt, endIt, col);
-            if (it != endIt && *it == col) {
-                values[static_cast<std::size_t>(it - colBegin)] += fact * m(i, j);
-            }
+        auto it = std::lower_bound(beginIt, endIt, col);
+        if (it != endIt && *it == col) {
+            return static_cast<int>(it - colBegin);
         }
-    }
+        return SparseSlotCache::SKIP;
+    };
+    assemblyCache.setCapacity(8 * values.size() + (std::size_t(1) << 20));
+    addWithCache(assemblyCache, m, id, fact, false, find, [&]() { return values.data(); });
 
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
@@ -250,6 +249,7 @@ SparsePythonCOOLinSOE::setB(const Vector &v, double fact)
 void
 SparsePythonCOOLinSOE::zeroA(void)
 {
+    assemblyCache.rewind();
     std::fill(values.begin(), values.end(), 0.0);
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;

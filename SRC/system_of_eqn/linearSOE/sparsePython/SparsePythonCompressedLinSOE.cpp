@@ -56,6 +56,7 @@ SparsePythonCompressedLinSOE::getNumEqn(void) const
 void
 SparsePythonCompressedLinSOE::buildCSRPattern(Graph &theGraph)
 {
+    assemblyCache.clear();
     const int size = theGraph.getNumVertex();
     const std::size_t nnz = static_cast<std::size_t>(size) + 2 * theGraph.getNumEdge();
     const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
@@ -111,6 +112,7 @@ SparsePythonCompressedLinSOE::buildCSRPattern(Graph &theGraph)
 void
 SparsePythonCompressedLinSOE::buildCSCPattern(Graph &theGraph)
 {
+    assemblyCache.clear();
     const int size = theGraph.getNumVertex();
     const std::size_t nnz = static_cast<std::size_t>(size) + 2 * theGraph.getNumEdge();
     const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
@@ -213,6 +215,7 @@ SparsePythonCompressedLinSOE::resizeVectors(int size)
         return -1;
     }
 
+    assemblyCache.clear();
     indexPtr.clear();
     indices.clear();
     values.clear();
@@ -241,33 +244,28 @@ SparsePythonCompressedLinSOE::addA(const Matrix &m, const ID &id, double fact)
     const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
 
     // Outer index: row for CSR, column for CSC. Each compressed slice is sorted,
-    // so entries are located by binary search.
-    for (int a = 0; a < idSize; ++a) {
+    // so entries are located by binary search the first time; later assemblies
+    // replay the cached slots.
+    auto find = [&](int a, int b) -> int {
         const int outer = id(a);
-        if (outer < 0 || outer >= size) {
-            continue;
+        const int inner = id(b);
+        if (outer < 0 || outer >= size || inner < 0 || inner >= size) {
+            return SparseSlotCache::SKIP;
         }
-
+        // SYMMETRIC_LOWER keeps row >= column only.
+        if (lower && (csr ? inner > outer : inner < outer)) {
+            return SparseSlotCache::SKIP;
+        }
         auto beginIt = indices.begin() + indexPtr[static_cast<std::size_t>(outer)];
         auto endIt = indices.begin() + indexPtr[static_cast<std::size_t>(outer + 1)];
-
-        for (int b = 0; b < idSize; ++b) {
-            const int inner = id(b);
-            if (inner < 0 || inner >= size) {
-                continue;
-            }
-            // SYMMETRIC_LOWER keeps row >= column only.
-            if (lower && (csr ? inner > outer : inner < outer)) {
-                continue;
-            }
-
-            auto it = std::lower_bound(beginIt, endIt, inner);
-            if (it != endIt && *it == inner) {
-                const std::size_t offset = static_cast<std::size_t>(it - indices.begin());
-                values[offset] += fact * (csr ? m(a, b) : m(b, a));
-            }
+        auto it = std::lower_bound(beginIt, endIt, inner);
+        if (it != endIt && *it == inner) {
+            return static_cast<int>(it - indices.begin());
         }
-    }
+        return SparseSlotCache::SKIP;
+    };
+    assemblyCache.setCapacity(8 * values.size() + (std::size_t(1) << 20));
+    addWithCache(assemblyCache, m, id, fact, !csr, find, [&]() { return values.data(); });
 
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
@@ -353,6 +351,7 @@ SparsePythonCompressedLinSOE::setB(const Vector &v, double fact)
 void
 SparsePythonCompressedLinSOE::zeroA(void)
 {
+    assemblyCache.rewind();
     std::fill(values.begin(), values.end(), 0.0);
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;

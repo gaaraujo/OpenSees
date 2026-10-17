@@ -17,6 +17,7 @@
 
 #include <EigenSOE.h>
 #include <Vector.h>
+#include <SparseAssemblyCache.h>
 
 #include <cstdint>
 #include <unordered_map>
@@ -57,20 +58,18 @@ public:
 private:
     static uint64_t packRC(int row, int col);
     bool needsMatrixTransfer(void) const;
-    int accumulateTriplet(std::unordered_map<uint64_t, double> &map, int row, int col, double value);
-    int addMatrixWorker(std::unordered_map<uint64_t, double> &map, const Matrix &m, const ID &id, double fact);
+    int addMatrixWorker(SparseLocalTriplets &triplets, const Matrix &m, const ID &id, double fact);
     int buildMergeIndexMap(void);
-    int mergeTripletsInto(std::vector<double> &values, const int *rows, const int *cols,
-                          const double *vals, int nTrip);
     int resizeWorkerSOE(int numEqn);
     int getInnerNumEqn(void) const;
     int getInnerMatrixStatus(void) const;
     void setInnerMatrixStatus(int status);
-    void clearKTriplets(void) { kTripletMap.clear(); }
-    void clearMTriplets(void) { mTripletMap.clear(); }
+    void clearKTriplets(void) { kTriplets.zero(); }
+    void clearMTriplets(void) { mTriplets.zero(); }
     void ensureEigenStorage(int numModes, int numEqn);
-    int sendTripletMap(Channel *theChannel, const std::unordered_map<uint64_t, double> &map);
-    int recvAndMergeTripletMap(Channel *theChannel, std::vector<double> *values,
+    int sendTriplets(Channel *theChannel, SparseLocalTriplets &triplets);
+    int recvAndMergeTriplets(Channel *theChannel, SparseRootScatter &scatter, int worker,
+                             std::vector<double> *values,
                                bool merge);
 
     EigenSOE *thePythonSOE;
@@ -81,9 +80,11 @@ private:
 
     int size;
 
-    std::unordered_map<uint64_t, double> kTripletMap;
-    std::unordered_map<uint64_t, double> mTripletMap;
+    /** Worker: K and M contributions as flat (row, col, value) triplets. */
+    SparseLocalTriplets kTriplets, mTriplets;
     std::unordered_map<uint64_t, int> mergeIndexMap;
+    /** Rank 0: per worker, triplet slot -> flat offset into K / M values. */
+    SparseRootScatter kScatter, mScatter;
 
     // Cached eigenpairs (rank 0 copies from inner; workers receive broadcast)
     std::vector<double> eigenvalues;

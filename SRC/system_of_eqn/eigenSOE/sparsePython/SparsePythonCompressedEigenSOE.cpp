@@ -50,6 +50,8 @@ SparsePythonCompressedEigenSOE::getNumEqn(void) const
 void
 SparsePythonCompressedEigenSOE::buildCSRPattern(Graph &theGraph)
 {
+    kCache.clear();
+    mCache.clear();
     const int size = theGraph.getNumVertex();
     const std::size_t nnz = static_cast<std::size_t>(size) + 2 * theGraph.getNumEdge();
 
@@ -95,6 +97,8 @@ SparsePythonCompressedEigenSOE::buildCSRPattern(Graph &theGraph)
 void
 SparsePythonCompressedEigenSOE::buildCSCPattern(Graph &theGraph)
 {
+    kCache.clear();
+    mCache.clear();
     const int size = theGraph.getNumVertex();
     const std::size_t nnz = static_cast<std::size_t>(size) + 2 * theGraph.getNumEdge();
 
@@ -187,6 +191,8 @@ SparsePythonCompressedEigenSOE::resizeVectors(int size)
 
     // Keep getNumEqn() == size via indexPtr length; no values/pattern on workers.
     indexPtr.assign(static_cast<std::size_t>(size) + 1u, 0);
+    kCache.clear();
+    mCache.clear();
     indices.clear();
     kValues.clear();
     mValues.clear();
@@ -203,7 +209,9 @@ SparsePythonCompressedEigenSOE::updateMatrixStatus()
 }
 
 int
-SparsePythonCompressedEigenSOE::addA(const Matrix &m, const ID &id, double fact)
+SparsePythonCompressedEigenSOE::addToMatrix(SparseSlotCache &cache, std::vector<double> &values,
+                                            const Matrix &m, const ID &id, double fact,
+                                            const char *caller)
 {
     if (fact == 0.0) {
         return 0;
@@ -211,250 +219,53 @@ SparsePythonCompressedEigenSOE::addA(const Matrix &m, const ID &id, double fact)
 
     const int idSize = id.Size();
     if (idSize != m.noRows() || idSize != m.noCols()) {
-        opserr << "SparsePythonCompressedEigenSOE::addA - Matrix and ID not of similar sizes\n";
+        opserr << "SparsePythonCompressedEigenSOE::" << caller << " - Matrix and ID not of similar sizes\n";
         return -1;
     }
 
     const int size = getNumEqn();
+    const bool csr = (storageScheme == StorageScheme::CSR);
 
-    if (storageScheme == StorageScheme::CSR) {
-        if (fact == 1.0) {
-            for (int i = 0; i < idSize; ++i) {
-                const int row = id(i);
-                if (row < 0 || row >= size) {
-                    continue;
-                }
-    
-                const int start = indexPtr[static_cast<std::size_t>(row)];
-                const int end = indexPtr[static_cast<std::size_t>(row + 1)];
-    
-                for (int j = 0; j < idSize; ++j) {
-                    const int col = id(j);
-                    if (col < 0 || col >= size) {
-                        continue;
-                    }
-    
-                    for (int k = start; k < end; ++k) {
-                        if (indices[static_cast<std::size_t>(k)] == col) {
-                            kValues[static_cast<std::size_t>(k)] += m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
-            for (int i = 0; i < idSize; ++i) {
-                const int row = id(i);
-                if (row < 0 || row >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(row)];
-                const int end = indexPtr[static_cast<std::size_t>(row + 1)];
-
-                for (int j = 0; j < idSize; ++j) {
-                    const int col = id(j);
-                    if (col < 0 || col >= size) {
-                        continue;
-                    }
-
-                    for (int k = start; k < end; ++k) {
-                        if (indices[static_cast<std::size_t>(k)] == col) {
-                            kValues[static_cast<std::size_t>(k)] += fact * m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
+    // Outer index: row for CSR, column for CSC. Each compressed slice is sorted,
+    // so entries are located by binary search the first time; later assemblies
+    // replay the cached slots.
+    auto find = [&](int a, int b) -> int {
+        const int outer = id(a);
+        const int inner = id(b);
+        if (outer < 0 || outer >= size || inner < 0 || inner >= size) {
+            return SparseSlotCache::SKIP;
         }
-    } else { // CSC
-        if (fact == 1.0) {
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(col)];
-                const int end = indexPtr[static_cast<std::size_t>(col + 1)];
-
-                auto beginIt = indices.begin() + start;
-                auto endIt = indices.begin() + end;
-
-                for (int i = 0; i < idSize; ++i) {
-                    const int row = id(i);
-                    if (row < 0 || row >= size) {
-                        continue;
-                    }
-
-                    auto it = std::lower_bound(beginIt, endIt, row);
-                    if (it != endIt && *it == row) {
-                        const std::size_t offset = static_cast<std::size_t>(it - indices.begin());
-                        kValues[offset] += m(i, j);
-                    }
-                }
-            }
-        } else {
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(col)];
-                const int end = indexPtr[static_cast<std::size_t>(col + 1)];
-
-                auto beginIt = indices.begin() + start;
-                auto endIt = indices.begin() + end;
-
-                for (int i = 0; i < idSize; ++i) {
-                    const int row = id(i);
-                    if (row < 0 || row >= size) {
-                        continue;
-                    }
-
-                    auto it = std::lower_bound(beginIt, endIt, row);
-                    if (it != endIt && *it == row) {
-                        const std::size_t offset = static_cast<std::size_t>(it - indices.begin());
-                        kValues[offset] += fact * m(i, j);
-                    }
-                }
-            }
+        auto beginIt = indices.begin() + indexPtr[static_cast<std::size_t>(outer)];
+        auto endIt = indices.begin() + indexPtr[static_cast<std::size_t>(outer + 1)];
+        auto it = std::lower_bound(beginIt, endIt, inner);
+        if (it != endIt && *it == inner) {
+            return static_cast<int>(it - indices.begin());
         }
-    }
+        return SparseSlotCache::SKIP;
+    };
+    cache.setCapacity(8 * values.size() + (std::size_t(1) << 20));
+    addWithCache(cache, m, id, fact, !csr, find, [&]() { return values.data(); });
 
     updateMatrixStatus();
     return 0;
 }
 
 int
+SparsePythonCompressedEigenSOE::addA(const Matrix &m, const ID &id, double fact)
+{
+    return addToMatrix(kCache, kValues, m, id, fact, "addA");
+}
+
+int
 SparsePythonCompressedEigenSOE::addM(const Matrix &m, const ID &id, double fact)
 {
-    if (fact == 0.0) {
-        return 0;
-    }
-
-    const int idSize = id.Size();
-    if (idSize != m.noRows() || idSize != m.noCols()) {
-        opserr << "SparsePythonCompressedEigenSOE::addM - Matrix and ID not of similar sizes\n";
-        return -1;
-    }
-
-    const int size = getNumEqn();
-
-    if (storageScheme == StorageScheme::CSR) {
-        if (fact == 1.0) {
-            for (int i = 0; i < idSize; ++i) {
-                const int row = id(i);
-                if (row < 0 || row >= size) {
-                    continue;
-                }
-    
-                const int start = indexPtr[static_cast<std::size_t>(row)];
-                const int end = indexPtr[static_cast<std::size_t>(row + 1)];
-    
-                for (int j = 0; j < idSize; ++j) {
-                    const int col = id(j);
-                    if (col < 0 || col >= size) {
-                        continue;
-                    }
-    
-                    for (int k = start; k < end; ++k) {
-                        if (indices[static_cast<std::size_t>(k)] == col) {
-                            mValues[static_cast<std::size_t>(k)] += m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
-            for (int i = 0; i < idSize; ++i) {
-                const int row = id(i);
-                if (row < 0 || row >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(row)];
-                const int end = indexPtr[static_cast<std::size_t>(row + 1)];
-
-                for (int j = 0; j < idSize; ++j) {
-                    const int col = id(j);
-                    if (col < 0 || col >= size) {
-                        continue;
-                    }
-
-                    for (int k = start; k < end; ++k) {
-                        if (indices[static_cast<std::size_t>(k)] == col) {
-                            mValues[static_cast<std::size_t>(k)] += fact * m(i, j);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    } else { // CSC
-        if (fact == 1.0) {
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(col)];
-                const int end = indexPtr[static_cast<std::size_t>(col + 1)];
-
-                auto beginIt = indices.begin() + start;
-                auto endIt = indices.begin() + end;
-
-                for (int i = 0; i < idSize; ++i) {
-                    const int row = id(i);
-                    if (row < 0 || row >= size) {
-                        continue;
-                    }
-
-                    auto it = std::lower_bound(beginIt, endIt, row);
-                    if (it != endIt && *it == row) {
-                        const std::size_t offset = static_cast<std::size_t>(it - indices.begin());
-                        mValues[offset] += m(i, j);
-                    }
-                }
-            }
-        } else {
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                const int start = indexPtr[static_cast<std::size_t>(col)];
-                const int end = indexPtr[static_cast<std::size_t>(col + 1)];
-
-                auto beginIt = indices.begin() + start;
-                auto endIt = indices.begin() + end;
-
-                for (int i = 0; i < idSize; ++i) {
-                    const int row = id(i);
-                    if (row < 0 || row >= size) {
-                        continue;
-                    }
-
-                    auto it = std::lower_bound(beginIt, endIt, row);
-                    if (it != endIt && *it == row) {
-                        const std::size_t offset = static_cast<std::size_t>(it - indices.begin());
-                        mValues[offset] += fact * m(i, j);
-                    }
-                }
-            }
-        }
-    }
-
-    updateMatrixStatus();
-    return 0;
+    return addToMatrix(mCache, mValues, m, id, fact, "addM");
 }
 
 void
 SparsePythonCompressedEigenSOE::zeroA(void)
 {
+    kCache.rewind();
     std::fill(kValues.begin(), kValues.end(), 0.0);
     updateMatrixStatus();
 }
@@ -462,6 +273,7 @@ SparsePythonCompressedEigenSOE::zeroA(void)
 void
 SparsePythonCompressedEigenSOE::zeroM(void)
 {
+    mCache.rewind();
     std::fill(mValues.begin(), mValues.end(), 0.0);
     updateMatrixStatus();
 }
