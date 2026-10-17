@@ -36,11 +36,26 @@
 #include<Vector.h>
 #include<ID.h>
 #include<Channel.h>
+#include<vector>
+
+#ifdef _WIN32
+extern "C" int DGETRF(int *M, int *N, double *A, int *LDA, int *iPiv, int *INFO);
+extern "C" int DGETRS(char *TRANS, int *N, int *NRHS, double *A, int *LDA,
+                      int *iPiv, double *B, int *LDB, int *INFO);
+#define dgetrf_ DGETRF
+#define dgetrs_ DGETRS
+#else
+extern "C" int dgetrf_(int *M, int *N, double *A, int *LDA, int *iPiv, int *INFO);
+extern "C" int dgetrs_(char *TRANS, int *N, int *NRHS, double *A, int *LDA,
+                       int *iPiv, double *B, int *LDB, int *INFO);
+#endif
 
 struct LinearSOE::LowRank
 {
   Matrix Q, Z, G;
   Vector d, w1, w2;
+  std::vector<double> luG;  // LU factors of G, column major, formed with Z
+  std::vector<int> ipiv;
   bool active = false;
   bool basisValid = false;
 };
@@ -117,9 +132,15 @@ LinearSOE::solve(void)
   // x = x_s - Z G^{-1} Q^T x_s  (Q, Z, G and x_s are full on every rank)
   LowRank &lr = *theLowRank;
   Vector x(this->getX());
-  if (lr.w1.addMatrixTransposeVector(0.0, lr.Q, x, 1.0) < 0 ||
-      lr.G.Solve(lr.w1, lr.w2) < 0 ||
-      x.addMatrixVector(1.0, lr.Z, lr.w2, -1.0) < 0)
+  if (lr.w1.addMatrixTransposeVector(0.0, lr.Q, x, 1.0) < 0)
+    return -4;
+
+  // w2 = G^{-1} w1 with the factors formed in buildLowRankBasis()
+  int J = lr.w1.Size(), nrhs = 1, info = 0;
+  char trans = 'N';
+  lr.w2 = lr.w1;
+  dgetrs_(&trans, &J, &nrhs, lr.luG.data(), &J, lr.ipiv.data(), &lr.w2(0), &J, &info);
+  if (info != 0 || x.addMatrixVector(1.0, lr.Z, lr.w2, -1.0) < 0)
     return -4;
   this->setX(x);
   return res;
@@ -228,6 +249,19 @@ LinearSOE::buildLowRankBasis(void)
     return -3;
   for (int i = 0; i < J; ++i)
     lr.G(i, i) += 1.0 / lr.d(i);
+
+  // factor G once; each solve reuses the factors until A_s changes
+  lr.luG.resize(J * J);
+  lr.ipiv.resize(J);
+  for (int j = 0; j < J; ++j)
+    for (int i = 0; i < J; ++i)
+      lr.luG[i + j * J] = lr.G(i, j);
+  int m = J, ld = J, info = 0;
+  dgetrf_(&m, &m, lr.luG.data(), &ld, lr.ipiv.data(), &info);
+  if (info != 0) {
+    opserr << "WARNING LinearSOE::solve() - factorization of G failed, info = " << info << "\n";
+    return -3;
+  }
 
   lr.basisValid = true;
   return 0;
