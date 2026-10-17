@@ -687,9 +687,21 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.useAlphaCloseCheck = true;
         } else if (strcmp(tok, "-initAccel") == 0) {
             opts.initAccel = true;
+        } else if (strcmp(tok, "-noSecondPass") == 0) {
+            opts.noSecondPass = true;
+        } else if (strcmp(tok, "-tangentAtStart") == 0) {
+            opts.tangentAtStart = true;
+        } else if (strcmp(tok, "-stiffnessFactor") == 0) {
+            int one = 1;
+            if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
+                !(opts.stiffnessFactor > 0.0)) {
+                opserr << "WARNING CudaExplicitAlpha family - -stiffnessFactor needs a positive value\n";
+                return false;
+            }
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s>\n";
             return false;
         }
     }
@@ -799,6 +811,9 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       beta(_beta),
       gamma(_gamma),
       updElemDisp(opts.updElemDisp),
+      noSecondPass(opts.noSecondPass),
+      tangentAtStart(opts.tangentAtStart),
+      stiffnessFactor(opts.stiffnessFactor),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),
@@ -917,10 +932,13 @@ int CudaExplicitAlpha::formEleTangent(FE_Element *theEle)
         return 0;
     }
     theEle->zeroTangent();
-    if (statusFlag == CURRENT_TANGENT) {
-        theEle->addKtToTang(c1);
-    } else if (statusFlag == INITIAL_TANGENT) {
-        theEle->addKiToTang(c1);
+    // -tangentAtStart: K from the current tangent at the moment the operators are formed (e.g. the
+    // post-gravity state) instead of the initial tangent; -stiffnessFactor s: s*K in every operator.
+    const int kFlag = (tangentAtStart && statusFlag == INITIAL_TANGENT) ? CURRENT_TANGENT : statusFlag;
+    if (kFlag == CURRENT_TANGENT) {
+        theEle->addKtToTang(c1 * stiffnessFactor);
+    } else if (kFlag == INITIAL_TANGENT) {
+        theEle->addKiToTang(c1 * stiffnessFactor);
     }
     theEle->addCtoTang(c2);
     theEle->addMtoTang(c3);
@@ -1282,9 +1300,11 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         }
     }
 
+    // -noSecondPass: skip the element update in update() (OpenSees' second pass at (u_{n+alpha}, v_{n+1}));
+    // the alpha-level evaluation of newStep is then the committing one: the method as published.
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
-    if (theModel->updateDomain() < 0) {
+    if (!noSecondPass && theModel->updateDomain() < 0) {
         opserr << "ERROR CudaExplicitAlpha::update() - updateDomain failed"
                << " |U|=" << U->Norm()
                << " |Udot|=" << Udot->Norm()
@@ -1373,7 +1393,8 @@ void CudaExplicitAlpha::Print(OPS_Stream &s, int flag)
 {
     (void)flag;
     s << "CudaExplicitAlpha alphaF=" << alphaF << " alphaM=" << alphaM
-      << " initAccel=" << (initAccel ? 1 : 0);
+      << " initAccel=" << (initAccel ? 1 : 0) << " noSecondPass=" << (noSecondPass ? 1 : 0)
+      << " tangentAtStart=" << (tangentAtStart ? 1 : 0) << " stiffnessFactor=" << stiffnessFactor;
     s << endln;
 }
 

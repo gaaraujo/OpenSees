@@ -20,6 +20,18 @@
 
 namespace {
 
+bool s_noSecondPass = false;
+bool s_tangentAtStart = false;
+double s_stiffnessFactor = 1.0;
+template <class T> T *markOnePass(T *p)
+{
+    if (p != nullptr) {
+        p->setNoSecondPass(s_noSecondPass);
+        p->setOperatorOptions(s_tangentAtStart, s_stiffnessFactor);
+    }
+    return p;
+}
+
 bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel, bool &useAlphaCloseCheck,
                                        bool &initAccel)
 {
@@ -27,6 +39,9 @@ bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel
     incrementalAccel = false;
     useAlphaCloseCheck = false;
     initAccel = false;
+    s_noSecondPass = false;
+    s_tangentAtStart = false;
+    s_stiffnessFactor = 1.0;
     while (OPS_GetNumRemainingInputArgs() > 0) {
         const char *argvLoc = OPS_GetString();
         if (argvLoc == nullptr) {
@@ -40,9 +55,21 @@ bool parseExplicitAlphaMultiSOEOptions(bool &updElemDisp, bool &incrementalAccel
             useAlphaCloseCheck = true;
         } else if (strcmp(argvLoc, "-initAccel") == 0) {
             initAccel = true;
+        } else if (strcmp(argvLoc, "-noSecondPass") == 0) {
+            s_noSecondPass = true;
+        } else if (strcmp(argvLoc, "-tangentAtStart") == 0) {
+            s_tangentAtStart = true;
+        } else if (strcmp(argvLoc, "-stiffnessFactor") == 0) {
+            int one = 1;
+            if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &s_stiffnessFactor) != 0 ||
+                !(s_stiffnessFactor > 0.0)) {
+                opserr << "WARNING ExplicitAlphaMultiSOE family - -stiffnessFactor needs a positive value\n";
+                return false;
+            }
         } else {
             opserr << "WARNING ExplicitAlphaMultiSOE family - unknown flag " << argvLoc
-                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>\n";
+                   << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s>\n";
             return false;
         }
     }
@@ -101,8 +128,8 @@ OPS_ExplicitAlphaMultiSOE(void)
         return nullptr;
     }
 
-    theIntegrator = new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                              useAlphaCloseCheck, initAccel);
+    theIntegrator = markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                              useAlphaCloseCheck, initAccel));
 
     if (theIntegrator == nullptr)
         opserr << "WARNING - out of memory creating ExplicitAlphaMultiSOE integrator\n";
@@ -141,8 +168,8 @@ OPS_KRAlphaExplicitMultiSOE(void)
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                     useAlphaCloseCheck, initAccel);
+    return markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                     useAlphaCloseCheck, initAccel));
 }
 
 void *
@@ -180,8 +207,8 @@ OPS_MKRAlphaExplicitMultiSOE(void)
         return nullptr;
     }
 
-    return new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
-                                     useAlphaCloseCheck, initAccel);
+    return markOnePass(new ExplicitAlphaMultiSOE(alphaF, alphaM, gamma, beta, updElemDisp, incrementalAccel,
+                                     useAlphaCloseCheck, initAccel));
 }
 
 
@@ -727,10 +754,13 @@ ExplicitAlphaMultiSOE::formEleTangent(FE_Element *theEle)
     theEle->zeroTangent();
 
     // Assembled tangent: c1*K + c2*C + c3*M (K from Kt or Ki according to statusFlag in formTangentOnSOE).
-    if (statusFlag == CURRENT_TANGENT)
-        theEle->addKtToTang(c1);
-    else if (statusFlag == INITIAL_TANGENT)
-        theEle->addKiToTang(c1);
+    // -tangentAtStart: K from the current tangent at the moment the operators are formed (e.g. the
+    // post-gravity state) instead of the initial tangent; -stiffnessFactor s: s*K in every operator.
+    const int kFlag = (tangentAtStart && statusFlag == INITIAL_TANGENT) ? CURRENT_TANGENT : statusFlag;
+    if (kFlag == CURRENT_TANGENT)
+        theEle->addKtToTang(c1 * stiffnessFactor);
+    else if (kFlag == INITIAL_TANGENT)
+        theEle->addKiToTang(c1 * stiffnessFactor);
 
     theEle->addCtoTang(c2);
     theEle->addMtoTang(c3);
@@ -812,9 +842,11 @@ ExplicitAlphaMultiSOE::update(const Vector &aiPlusOne)
         *Udotdot = aiPlusOne;
     }
 
+    // -noSecondPass: skip the element update in update() (OpenSees' second pass at (u_{n+alpha}, v_{n+1}));
+    // the alpha-level evaluation of newStep is then the committing one: the method as published.
     theModel->setVel(*Udot);
     theModel->setAccel(*Udotdot);
-    if (theModel->updateDomain() < 0) {
+    if (!noSecondPass && theModel->updateDomain() < 0) {
         opserr << "WARNING ExplicitAlphaMultiSOE::update() - updateDomain failed\n";
         return -5;
     }
