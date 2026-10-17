@@ -121,28 +121,7 @@ DistributedCudaBcsrLinSOE::ensureWorkArea(int size)
 void
 DistributedCudaBcsrLinSOE::clearTriplets(void)
 {
-    tripletMap.clear();
-}
-
-int
-DistributedCudaBcsrLinSOE::accumulateTriplet(int row, int col, double value)
-{
-    if (row < 0 || col < 0 || row >= myBsize || col >= myBsize)
-        return 0;
-
-    if (theCudaSOE != nullptr &&
-        theCudaSOE->getMatrixStorageMode() == CudaBcsrLinSOE::MatrixStorageMode::SYMMETRIC_LOWER &&
-        row < col) {
-        return 0;
-    }
-
-    tripletMap[packRC(row, col)] += value;
-
-    if (theCudaSOE != nullptr &&
-        theCudaSOE->getMatrixStatus() == CudaBcsrLinSOE::MatrixStatus::UNCHANGED) {
-        theCudaSOE->setMatrixStatus(CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED);
-    }
-    return 0;
+    localTriplets.zero();
 }
 
 int
@@ -158,45 +137,12 @@ DistributedCudaBcsrLinSOE::addAWorker(const Matrix &m, const ID &id, double fact
         return -1;
     }
 
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, m(i, j)) != 0)
-                    return -1;
-            }
-        }
-    } else if (fact == -1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, -m(i, j)) != 0)
-                    return -1;
-            }
-        }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, fact * m(i, j)) != 0)
-                    return -1;
-            }
-        }
+    const bool lowerOnly =
+        theCudaSOE != nullptr &&
+        theCudaSOE->getMatrixStorageMode() == CudaBcsrLinSOE::MatrixStorageMode::SYMMETRIC_LOWER;
+    if (localTriplets.add(m, id, fact, myBsize, lowerOnly) && theCudaSOE != nullptr &&
+        theCudaSOE->getMatrixStatus() == CudaBcsrLinSOE::MatrixStatus::UNCHANGED) {
+        theCudaSOE->setMatrixStatus(CudaBcsrLinSOE::MatrixStatus::COEFFICIENTS_CHANGED);
     }
     return 0;
 }
@@ -252,30 +198,28 @@ DistributedCudaBcsrLinSOE::buildMergeIndexMap(void)
 }
 
 int
-DistributedCudaBcsrLinSOE::mergeTripletsIntoA(const int *rows, const int *cols,
-                                              const double *vals, int nTrip)
+DistributedCudaBcsrLinSOE::recvWorkerTriplets(Channel &theChannel, int j, int header, bool merge)
 {
-    if (nTrip <= 0)
+    // header: 0 nothing, n > 0 full triplets, -(n + 2) values only (SparseLocalTriplets).
+    if (header == 0 || header == -1)
         return 0;
-    if (theCudaSOE == nullptr || rows == nullptr || cols == nullptr || vals == nullptr)
+    if (theCudaSOE == nullptr)
         return -1;
 
+    auto offsetOf = [this](int row, int col) -> int {
+        const auto it = mergeIndexMap.find(packRC(row, col));
+        return it == mergeIndexMap.end() ? -1 : it->second;
+    };
     double *A = theCudaSOE->getHostAValuesData();
-    if (A == nullptr) {
-        opserr << "WARNING DistributedCudaBcsrLinSOE::mergeTripletsIntoA() - no host A\n";
+    if (merge && A == nullptr) {
+        opserr << "WARNING DistributedCudaBcsrLinSOE::recvWorkerTriplets() - no host A\n";
+        rootScatter.recvAndMerge(theChannel, j, header, false, A, offsetOf);
         return -1;
     }
-
-    for (int i = 0; i < nTrip; ++i) {
-        const auto it = mergeIndexMap.find(packRC(rows[i], cols[i]));
-        if (it == mergeIndexMap.end()) {
-            opserr << "WARNING DistributedCudaBcsrLinSOE::mergeTripletsIntoA() - "
-                   << "no CSR entry for (" << rows[i] << ", " << cols[i] << ")\n";
-            return -1;
-        }
-        A[it->second] += vals[i];
-    }
-    theCudaSOE->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
+    if (rootScatter.recvAndMerge(theChannel, j, header, merge, A, offsetOf) < 0)
+        return -1;
+    if (merge)
+        theCudaSOE->setAValuesPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
     return 0;
 }
 
@@ -293,8 +237,9 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
         return -1;
     }
 
-    clearTriplets();
+    localTriplets.reset();
     mergeIndexMap.clear();
+    rootScatter.reset(numChannels);
 
     int result = 0;
 
@@ -550,11 +495,13 @@ DistributedCudaBcsrLinSOE::solve(void)
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        const int nTrip = sendA ? static_cast<int>(tripletMap.size()) : 0;
+        // Triplet count of SparseLocalTriplets::header(): n >= 0 full triplets, or
+        // -(n + 2) values only once rank 0 holds this rank's pattern.
+        const int nTrip = sendA ? localTriplets.header() : 0;
         if (!skipBMerge) {
             // Header after the RHS: -1 if the matrix is unchanged on this rank, else the
-            // number of triplets that follow. Rank 0 reads it instead of its own status,
-            // so the triplet messages cannot go unmatched.
+            // triplet count. Rank 0 reads it instead of its own status, so the triplet
+            // messages cannot go unmatched.
             myB[myBsize] = sendA ? static_cast<double>(nTrip) : -1.0;
             theChannel->sendVector(0, 0, *myVectBHeader);
         } else if (sendA) {
@@ -564,23 +511,8 @@ DistributedCudaBcsrLinSOE::solve(void)
             theChannel->sendID(0, 0, nTripID);
         }
 
-        if (sendA) {
-            if (nTrip > 0) {
-                ID rows(nTrip);
-                ID cols(nTrip);
-                Vector vals(nTrip);
-                int k = 0;
-                for (const auto &entry : tripletMap) {
-                    rows(k) = static_cast<int>(entry.first >> 32);
-                    cols(k) = static_cast<int>(entry.first & 0xffffffffu);
-                    vals(k) = entry.second;
-                    ++k;
-                }
-                theChannel->sendID(0, 0, rows);
-                theChannel->sendID(0, 0, cols);
-                theChannel->sendVector(0, 0, vals);
-            }
-        }
+        if (sendA)
+            localTriplets.send(*theChannel);
 
         theChannel->recvVector(0, 0, vectX);
         if (!skipBMerge)
@@ -615,14 +547,14 @@ DistributedCudaBcsrLinSOE::solve(void)
         if (!skipBMerge) {
             theChannel->recvVector(0, 0, remoteBHeader);
             vectB += remoteB;
-            const double header = workArea[myBsize];
-            workerSendsA = header >= 0.0;
-            nTrip = workerSendsA ? static_cast<int>(header) : 0;
+            const int header = static_cast<int>(workArea[myBsize]);
+            workerSendsA = header != -1;
+            nTrip = workerSendsA ? header : 0;
         } else if (sendA) {
             ID nTripID(1);
             theChannel->recvID(0, 0, nTripID);
             nTrip = nTripID(0);
-            if (nTrip < 0) {
+            if (nTrip == -1) {
                 opserr << "WARNING DistributedCudaBcsrLinSOE::solve() - invalid nTrip\n";
                 result(0) = -1;
                 continue;
@@ -637,18 +569,8 @@ DistributedCudaBcsrLinSOE::solve(void)
             result(0) = -1;
         }
 
-        if (nTrip > 0) {
-            ID rows(nTrip);
-            ID cols(nTrip);
-            Vector vals(nTrip);
-            theChannel->recvID(0, 0, rows);
-            theChannel->recvID(0, 0, cols);
-            theChannel->recvVector(0, 0, vals);
-            if (result(0) == 0 &&
-                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
-                result(0) = -1;
-            }
-        }
+        if (recvWorkerTriplets(*theChannel, j, nTrip, result(0) == 0) < 0)
+            result(0) = -1;
     }
 
     if (result(0) == 0)
@@ -855,30 +777,14 @@ DistributedCudaBcsrLinSOE::sendPendingTriplets(Channel *theChannel)
     if (theChannel == 0)
         return -1;
 
-    const int nTrip = static_cast<int>(tripletMap.size());
     ID nTripID(1);
-    nTripID(0) = nTrip;
+    nTripID(0) = localTriplets.header();
     if (theChannel->sendID(0, 0, nTripID) < 0)
         return -1;
-
-    if (nTrip > 0) {
-        ID rows(nTrip);
-        ID cols(nTrip);
-        Vector vals(nTrip);
-        int k = 0;
-        for (const auto &entry : tripletMap) {
-            rows(k) = static_cast<int>(entry.first >> 32);
-            cols(k) = static_cast<int>(entry.first & 0xffffffffu);
-            vals(k) = entry.second;
-            ++k;
-        }
-        if (theChannel->sendID(0, 0, rows) < 0 ||
-            theChannel->sendID(0, 0, cols) < 0 ||
-            theChannel->sendVector(0, 0, vals) < 0) {
-            return -1;
-        }
-    }
-    clearTriplets();
+    if (localTriplets.send(*theChannel) < 0)
+        return -1;
+    // Rank 0 now holds these contributions: keep the pattern, zero the values.
+    localTriplets.clearValues();
     return 0;
 }
 
@@ -894,25 +800,12 @@ DistributedCudaBcsrLinSOE::recvAndMergeTriplets(void)
             continue;
         }
         const int nTrip = nTripID(0);
-        if (nTrip < 0) {
+        if (nTrip == -1) {
             status = -1;
             continue;
         }
-        if (nTrip > 0) {
-            ID rows(nTrip);
-            ID cols(nTrip);
-            Vector vals(nTrip);
-            if (theChannel->recvID(0, 0, rows) < 0 ||
-                theChannel->recvID(0, 0, cols) < 0 ||
-                theChannel->recvVector(0, 0, vals) < 0) {
-                status = -1;
-                continue;
-            }
-            if (status == 0 &&
-                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
-                status = -1;
-            }
-        }
+        if (recvWorkerTriplets(*theChannel, j, nTrip, status == 0) < 0)
+            status = -1;
     }
     return status;
 }

@@ -33,6 +33,7 @@
 #define SparseCsrLinSOE_h
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 #include <vector>
 #include "CsrMatrix.h"
@@ -92,7 +93,7 @@ public:
     int resizeHostVectors(int numEqn);
 
 private:
-    int addAMatrixElement(int globalRow, int globalCol, double value);
+    int findValueSlot(int globalRow, int globalCol) const;
     bool isValidGlobalIndex(int index) const { return index >= 0 && index < m_X.Size(); }
 
     CsrMatrix::Solver m_solver;
@@ -103,6 +104,8 @@ private:
 
     std::vector<int> m_csrIndices;
     std::vector<double> m_aValues, m_hostB, m_hostX;
+    // Value slots of addA() entries, in call order (cleared when the structure changes).
+    SparseSlotCache m_assemblyCache;
     Vector m_X, m_B;
 
     CsrMatrix m_matA;  // bound to m_csrIndices / m_aValues; holds the factorization of A

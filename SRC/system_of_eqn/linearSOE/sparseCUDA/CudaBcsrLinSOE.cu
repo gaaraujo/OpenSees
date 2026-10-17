@@ -254,6 +254,7 @@ int CudaBcsrLinSOE::installHostStructure(int numEqn,
     m_B.setData(raw_pointer_cast(m_hostB.data()), numEqn);
     m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
 
+    hostStructureChanged();
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
     setBPrimaryLocation(DataLocation::Host);
     setXPrimaryLocation(DataLocation::Host);
@@ -312,6 +313,7 @@ int CudaBcsrLinSOE::resizeHostVectors(int numEqn, int blockSize, int paddedSize)
         m_X.setData(raw_pointer_cast(m_hostX.data()), numEqn);
     }
 
+    hostStructureChanged();
     m_matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
     setBPrimaryLocation(DataLocation::Host);
     setXPrimaryLocation(DataLocation::Host);
@@ -553,6 +555,8 @@ int CudaBcsrLinSOE::setSize(Graph &theGraph)
         return -1;
     }
 
+    m_assemblyCache.clear();
+
     // Build data structures for the matrix in either standard or block CSR format
     if (m_blockSize == 1) {
         if (buildStandardCSR(theGraph) != 0) {
@@ -567,6 +571,8 @@ int CudaBcsrLinSOE::setSize(Graph &theGraph)
             return -1;
         }
     }
+
+    hostStructureChanged();
 
     // Create OpenSees vectors wrapping the host vectors
     m_B.setData(raw_pointer_cast(m_hostB.data()), originalSize);
@@ -600,78 +606,54 @@ int CudaBcsrLinSOE::setSize(Graph &theGraph)
     return 0;
 }
 
-// Helper methods for matrix assembly
-int CudaBcsrLinSOE::addAMatrixElement(int globalRow, int globalCol, double value)
+// Structure bookkeeping: drop the cached assembly slots and note whether the
+// column indices of every (block) row are sorted (they are for the graph-built
+// structures: ID::insert keeps them sorted), so findValueSlot can bisect.
+void CudaBcsrLinSOE::hostStructureChanged(void)
 {
-    if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol)) {
+    m_assemblyCache.clear();
+    m_colsSorted = false;
+    if (m_hostCsrIndices.empty() || m_hostB.empty() || m_blockSize < 1) {
+        return;
+    }
+    const int numRows = static_cast<int>(m_hostB.size()) / m_blockSize;
+    if (static_cast<int>(m_hostCsrIndices.size()) < numRows + 1) {
+        return;
+    }
+    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    const int *AcolIdx = ArowPtr + numRows + 1;
+    for (int r = 0; r < numRows; ++r) {
+        for (int k = ArowPtr[r] + 1; k < ArowPtr[r + 1]; ++k) {
+            if (AcolIdx[k - 1] >= AcolIdx[k]) {
+                return;
+            }
+        }
+    }
+    m_colsSorted = true;
+}
+
+// Offset of entry (globalRow, globalCol) in m_hostAValues: CSR position, or block
+// offset plus the row-major position inside the block for BCSR. -1 if absent.
+int CudaBcsrLinSOE::findValueSlot(int globalRow, int globalCol) const
+{
+    const int bs = m_blockSize;
+    const int numRows = static_cast<int>(m_hostB.size()) / bs;
+    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
+    const int *AcolIdx = ArowPtr + numRows + 1;
+
+    const int row = globalRow / bs;
+    const int col = globalCol / bs;
+    const int *begin = AcolIdx + ArowPtr[row];
+    const int *end = AcolIdx + ArowPtr[row + 1];
+    const int *it = m_colsSorted ? std::lower_bound(begin, end, col) : std::find(begin, end, col);
+    if (it == end || *it != col) {
         return -1;
     }
-
-    // Symmetric lower storage: only store entries where row >= col.
-    if (m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER) {
-        if (globalRow < globalCol) {
-            return 0; // Skip upper triangle
-        }
+    const int k = static_cast<int>(it - AcolIdx);
+    if (bs == 1) {
+        return k;
     }
-
-    if (m_blockSize > 1) {
-        return addAMatrixElementBlock(globalRow, globalCol, value);
-    } else {
-        return addAMatrixElementStandard(globalRow, globalCol, value);
-    }
-}
-
-int CudaBcsrLinSOE::addAMatrixElementBlock(int globalRow, int globalCol, double value)
-{
-    const int numBlockRows = m_hostB.size() / m_blockSize;
-    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
-    const int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + numBlockRows + 1;
-    
-    const int blockRow = globalRow / m_blockSize;
-    const int localRow = globalRow % m_blockSize;
-    const int blockCol = globalCol / m_blockSize;
-    const int localCol = globalCol % m_blockSize;
-    
-    // Find the block index in m_AColIdxBlock where m_AColIdxBlock[k] == blockCol 
-    // and k is in [m_ARowPtrBlock[blockRow], m_ARowPtrBlock[blockRow + 1])
-    const int startRowPtr = ArowPtr[blockRow];
-    const int endRowPtr = ArowPtr[blockRow + 1];
-    for (int k = startRowPtr; k < endRowPtr; ++k) {
-        if (AcolIdx[k] == blockCol) {
-            // Block k holds the blockRow, blockCol block
-            const int blockOffset = k * m_blockSize * m_blockSize;
-            const int localOffset = localRow * m_blockSize + localCol; // row-major
-            m_hostAValues[blockOffset + localOffset] += value;
-            return 0;
-        }
-    }
-    
-    opserr << "WARNING: CudaBcsrLinSOE::addAMatrixElementBlock() - "
-           << "Could not find block for row (" << globalRow << "), "
-           << "col (" << globalCol << ")" << endln;
-    return -1;
-}
-
-int CudaBcsrLinSOE::addAMatrixElementStandard(int globalRow, int globalCol, double value)
-{
-    int size = m_hostB.size();
-    const int *ArowPtr = raw_pointer_cast(m_hostCsrIndices.data());
-    const int *AcolIdx = raw_pointer_cast(m_hostCsrIndices.data()) + size + 1;
-    // Find the column index in m_AColIdxBlock where m_AColIdxBlock[k] == globalCol 
-    // and k is in [m_ARowPtrBlock[globalRow], m_ARowPtrBlock[globalRow + 1])
-    const int startRowPtr = ArowPtr[globalRow];
-    const int endRowPtr = ArowPtr[globalRow + 1];
-    for (int k = startRowPtr; k < endRowPtr; ++k) {
-        if (AcolIdx[k] == globalCol) {
-            m_hostAValues[k] += value;
-            return 0;
-        }
-    }
-    
-    opserr << "WARNING: CudaBcsrLinSOE::addAMatrixElementStandard() - "
-           << "Could not find element for row (" << globalRow << "), "
-           << "col (" << globalCol << ")" << endln;
-    return -1;
+    return k * bs * bs + (globalRow % bs) * bs + (globalCol % bs); // row-major blocks
 }
 
 int CudaBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
@@ -693,61 +675,38 @@ int CudaBcsrLinSOE::addA(const Matrix &m, const ID &id, double fact)
                << "Matrix and ID not of similar sizes" << endln;
         return -1;
     }
-    
-    auto reportAddError = [](const Matrix &m, int i, int j, int globalRow, int globalCol) {
-        opserr << "WARNING: CudaBcsrLinSOE::addA() - "
-               << "Failed to add m(" << i << ", " << j << ") = " << m(i, j)
-               << " to the system of equations at location "
-               << "(" << globalRow << ", " << globalCol << ")" << endln;
+
+    // Search the pattern for each entry the first time; later assemblies replay
+    // the cached value slots (same slots, same order).
+    const bool symmetricLower = (m_storageMode == MatrixStorageMode::SYMMETRIC_LOWER);
+    auto find = [&](int i, int j) -> int {
+        const int globalRow = id(i);
+        const int globalCol = id(j);
+        if (!isValidGlobalIndex(globalRow) || !isValidGlobalIndex(globalCol)) {
+            return SparseSlotCache::SKIP;
+        }
+        // Symmetric lower storage: only store entries where row >= col.
+        if (symmetricLower && globalRow < globalCol) {
+            return SparseSlotCache::SKIP;
+        }
+        const int slot = findValueSlot(globalRow, globalCol);
+        return slot < 0 ? SparseSlotCache::MISSING : slot;
     };
-
-    // Add matrix elements using the helper methods
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (!isValidGlobalIndex(globalRow)) continue;
-
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (!isValidGlobalIndex(globalCol)) continue;
-                
-                if (addAMatrixElement(globalRow, globalCol, m(i, j)) != 0) {
-                    reportAddError(m, i, j, globalRow, globalCol);
-                    return -1;
-                }
-            }
-        }
-    } else if (fact == -1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (!isValidGlobalIndex(globalRow)) continue;
-
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (!isValidGlobalIndex(globalCol)) continue;
-                
-                if (addAMatrixElement(globalRow, globalCol, -m(i, j)) != 0) {
-                    reportAddError(m, i, j, globalRow, globalCol);
-                    return -1;
-                }
-            }
-        }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (!isValidGlobalIndex(globalRow)) continue;
-
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (!isValidGlobalIndex(globalCol)) continue;
-                
-                if (addAMatrixElement(globalRow, globalCol, fact * m(i, j)) != 0) {
-                    reportAddError(m, i, j, globalRow, globalCol);
-                    return -1;
-                }
-            }
-        }
+    m_assemblyCache.setCapacity(8 * m_hostAValues.size() + (std::size_t(1) << 20));
+    int failedI = 0;
+    int failedJ = 0;
+    if (addWithCache(m_assemblyCache, m, id, fact, false, find,
+                     [&]() { return raw_pointer_cast(m_hostAValues.data()); }, &failedI, &failedJ) != 0) {
+        opserr << "WARNING: CudaBcsrLinSOE::addA() - "
+               << "Could not find " << (m_blockSize > 1 ? "block" : "element") << " for row ("
+               << id(failedI) << "), col (" << id(failedJ) << ")" << endln;
+        opserr << "WARNING: CudaBcsrLinSOE::addA() - "
+               << "Failed to add m(" << failedI << ", " << failedJ << ") = " << m(failedI, failedJ)
+               << " to the system of equations at location "
+               << "(" << id(failedI) << ", " << id(failedJ) << ")" << endln;
+        return -1;
     }
+
     // Update matrix status
     if (m_matrixStatus == MatrixStatus::UNCHANGED) {
         m_matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
@@ -957,6 +916,7 @@ int CudaBcsrLinSOE::setDeviceRowPtrs(const int *deviceSrc)
                         "setDeviceRowPtrs") != 0) {
         return -1;
     }
+    m_assemblyCache.clear();
     setAIndicesPrimaryLocation(DataLocation::Device);
     return 0;
 }
@@ -977,12 +937,14 @@ int CudaBcsrLinSOE::setDeviceColIndices(const int *deviceSrc)
                         "setDeviceColIndices") != 0) {
         return -1;
     }
+    m_assemblyCache.clear();
     setAIndicesPrimaryLocation(DataLocation::Device);
     return 0;
 }
 
 void CudaBcsrLinSOE::zeroA(void)
 {
+    m_assemblyCache.rewind();
     for (size_t i = 0; i < m_hostAValues.size(); i++) {
         m_hostAValues[i] = 0.0;
     }

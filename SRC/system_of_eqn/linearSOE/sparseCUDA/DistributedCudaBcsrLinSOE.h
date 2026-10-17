@@ -17,6 +17,7 @@
 #define DistributedCudaBcsrLinSOE_h
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 
 #include <cstdint>
@@ -100,10 +101,10 @@ private:
     void ensureMyBSize(int size);
     void ensureWorkArea(int size);
     void clearTriplets(void);
-    int accumulateTriplet(int row, int col, double value);
+    /** Rank 0: receive (and merge, if merge) what worker j announced with header. */
+    int recvWorkerTriplets(Channel &theChannel, int j, int header, bool merge);
     int addAWorker(const Matrix &m, const ID &id, double fact);
     int buildMergeIndexMap(void);
-    int mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip);
     /** Worker side of ensureMergedA / formAp triplet transfer. */
     int sendPendingTriplets(Channel *theChannel);
     /** Rank-0 side: recv+merge from all workers. */
@@ -125,11 +126,14 @@ private:
     Vector *myVectBHeader;
     int myBsize;
 
-    /** Worker: assembled sparse contributions keyed by (row,col). */
-    std::unordered_map<uint64_t, double> tripletMap;
+    /** Worker: assembled sparse contributions as flat (row, col, value) triplets. */
+    SparseLocalTriplets localTriplets;
 
     /** Rank 0: (row,col) -> flat offset into host A values; rebuilt in setSize. */
     std::unordered_map<uint64_t, int> mergeIndexMap;
+
+    /** Rank 0: per worker, triplet slot -> flat offset into host A values. */
+    SparseRootScatter rootScatter;
 
     bool globalRhsOnDevice;
 };
