@@ -18,6 +18,7 @@
 
 #include <LinearSOE.h>
 #include <Vector.h>
+#include <SparseAssemblyCache.h>
 
 #include <cstdint>
 #include <unordered_map>
@@ -62,11 +63,9 @@ private:
     bool needsMatrixTransfer(void) const;
     void ensureMyBSize(int size);
     void ensureWorkArea(int size);
-    void clearTriplets(void);
-    int accumulateTriplet(int row, int col, double value);
     int addAWorker(const Matrix &m, const ID &id, double fact);
     int buildMergeIndexMap(void);
-    int mergeTripletsIntoA(const int *rows, const int *cols, const double *vals, int nTrip);
+    double *rootValues(void);
     int resizeWorkerSOE(int numEqn);
     int getInnerMatrixStatus(void) const;
     void setInnerMatrixStatus(int status);
@@ -90,11 +89,14 @@ private:
     /** The inner SOE stores the lower triangle only (SYMMETRIC_LOWER). */
     bool lowerOnly = false;
 
-    /** Worker: assembled sparse contributions keyed by (row,col). */
-    std::unordered_map<uint64_t, double> tripletMap;
+    /** Worker: assembled sparse contributions as flat (row, col, value) triplets. */
+    SparseLocalTriplets localTriplets;
 
     /** Rank 0: (row,col) -> flat offset into matrix values; rebuilt in setSize. */
     std::unordered_map<uint64_t, int> mergeIndexMap;
+
+    /** Rank 0: per worker, triplet slot -> flat offset into matrix values. */
+    SparseRootScatter rootScatter;
 };
 
 #endif

@@ -4,6 +4,7 @@
 #include "SparsePythonCommon.h"
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 
 #include <vector>
@@ -79,6 +80,9 @@ class SparsePythonCOOLinSOE : public LinearSOE
     std::vector<double> values;
     std::vector<double> rhs;
     std::vector<double> sol;
+
+    // Value slots of addA() entries, in call order (cleared when the pattern changes).
+    SparseSlotCache assemblyCache;
 
     std::vector<int> rowOffsets;
 

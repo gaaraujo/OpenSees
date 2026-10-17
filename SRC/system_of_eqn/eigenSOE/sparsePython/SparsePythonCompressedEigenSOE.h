@@ -31,6 +31,7 @@
 // SparsePythonCompressedEigenSolver instance.
 
 #include <EigenSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 #include <vector>
 
@@ -92,6 +93,8 @@ class SparsePythonCompressedEigenSOE : public EigenSOE
 
   protected:
     void updateMatrixStatus();
+    int addToMatrix(SparseSlotCache &cache, std::vector<double> &values, const Matrix &m,
+                    const ID &id, double fact, const char *caller);
     void buildCSRPattern(Graph &theGraph);
     void buildCSCPattern(Graph &theGraph);
 
@@ -108,6 +111,9 @@ class SparsePythonCompressedEigenSOE : public EigenSOE
 
     // M matrix (mass) values
     std::vector<double> mValues;
+
+    // Value slots of addA() / addM() entries, in call order (cleared when the pattern changes).
+    SparseSlotCache kCache, mCache;
 
     MatrixStatus matrixStatus;
     StorageScheme storageScheme;

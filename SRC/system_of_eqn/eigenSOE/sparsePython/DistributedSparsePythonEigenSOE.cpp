@@ -99,20 +99,7 @@ DistributedSparsePythonEigenSOE::needsMatrixTransfer(void) const
 }
 
 int
-DistributedSparsePythonEigenSOE::accumulateTriplet(std::unordered_map<uint64_t, double> &map,
-                                                   int row, int col, double value)
-{
-    if (row < 0 || col < 0 || row >= size || col >= size)
-        return 0;
-
-    map[packRC(row, col)] += value;
-    if (getInnerMatrixStatus() == static_cast<int>(SparsePythonEigenMatrixStatus::UNCHANGED))
-        setInnerMatrixStatus(static_cast<int>(SparsePythonEigenMatrixStatus::COEFFICIENTS_CHANGED));
-    return 0;
-}
-
-int
-DistributedSparsePythonEigenSOE::addMatrixWorker(std::unordered_map<uint64_t, double> &map,
+DistributedSparsePythonEigenSOE::addMatrixWorker(SparseLocalTriplets &triplets,
                                                  const Matrix &m, const ID &id, double fact)
 {
     if (fact == 0.0)
@@ -125,18 +112,9 @@ DistributedSparsePythonEigenSOE::addMatrixWorker(std::unordered_map<uint64_t, do
         return -1;
     }
 
-    for (int i = 0; i < idSize; ++i) {
-        const int globalRow = id(i);
-        if (globalRow < 0 || globalRow >= size)
-            continue;
-        for (int j = 0; j < idSize; ++j) {
-            const int globalCol = id(j);
-            if (globalCol < 0 || globalCol >= size)
-                continue;
-            if (accumulateTriplet(map, globalRow, globalCol, fact * m(i, j)) != 0)
-                return -1;
-        }
-    }
+    if (triplets.add(m, id, fact, size) &&
+        getInnerMatrixStatus() == static_cast<int>(SparsePythonEigenMatrixStatus::UNCHANGED))
+        setInnerMatrixStatus(static_cast<int>(SparsePythonEigenMatrixStatus::COEFFICIENTS_CHANGED));
     return 0;
 }
 
@@ -187,29 +165,6 @@ DistributedSparsePythonEigenSOE::buildMergeIndexMap(void)
     return -1;
 }
 
-int
-DistributedSparsePythonEigenSOE::mergeTripletsInto(std::vector<double> &values,
-                                                   const int *rows, const int *cols,
-                                                   const double *vals, int nTrip)
-{
-    if (nTrip <= 0)
-        return 0;
-    if (rows == nullptr || cols == nullptr || vals == nullptr)
-        return -1;
-
-    for (int i = 0; i < nTrip; ++i) {
-        const auto it = mergeIndexMap.find(packRC(rows[i], cols[i]));
-        if (it == mergeIndexMap.end()) {
-            opserr << "WARNING DistributedSparsePythonEigenSOE::mergeTripletsInto() - "
-                   << "no matrix entry for (" << rows[i] << ", " << cols[i] << ")\n";
-            return -1;
-        }
-        if (static_cast<std::size_t>(it->second) >= values.size())
-            return -1;
-        values[static_cast<std::size_t>(it->second)] += vals[i];
-    }
-    return 0;
-}
 
 int
 DistributedSparsePythonEigenSOE::resizeWorkerSOE(int numEqn)
@@ -236,54 +191,38 @@ DistributedSparsePythonEigenSOE::ensureEigenStorage(int numModes, int numEqn)
 }
 
 int
-DistributedSparsePythonEigenSOE::sendTripletMap(Channel *theChannel,
-                                                const std::unordered_map<uint64_t, double> &map)
+DistributedSparsePythonEigenSOE::sendTriplets(Channel *theChannel, SparseLocalTriplets &triplets)
 {
-    const int nTrip = static_cast<int>(map.size());
+    // Count of SparseLocalTriplets::header(): n >= 0 full triplets, or -(n + 2)
+    // values only once rank 0 holds this rank's pattern.
     ID nTripID(1);
-    nTripID(0) = nTrip;
-    theChannel->sendID(0, 0, nTripID);
-
-    if (nTrip > 0) {
-        ID rows(nTrip);
-        ID cols(nTrip);
-        Vector vals(nTrip);
-        int k = 0;
-        for (const auto &entry : map) {
-            rows(k) = static_cast<int>(entry.first >> 32);
-            cols(k) = static_cast<int>(entry.first & 0xffffffffu);
-            vals(k) = entry.second;
-            ++k;
-        }
-        theChannel->sendID(0, 0, rows);
-        theChannel->sendID(0, 0, cols);
-        theChannel->sendVector(0, 0, vals);
-    }
-    return 0;
+    nTripID(0) = triplets.header();
+    if (theChannel->sendID(0, 0, nTripID) < 0)
+        return -1;
+    return triplets.send(*theChannel);
 }
 
 int
-DistributedSparsePythonEigenSOE::recvAndMergeTripletMap(Channel *theChannel,
-                                                        std::vector<double> *values,
-                                                        bool merge)
+DistributedSparsePythonEigenSOE::recvAndMergeTriplets(Channel *theChannel, SparseRootScatter &scatter,
+                                                      int worker, std::vector<double> *values,
+                                                      bool merge)
 {
     ID nTripID(1);
-    theChannel->recvID(0, 0, nTripID);
-    const int nTrip = nTripID(0);
-    if (nTrip < 0)
+    if (theChannel->recvID(0, 0, nTripID) < 0)
         return -1;
-    if (nTrip == 0)
-        return 0;
+    const int header = nTripID(0);
+    if (header == -1)
+        return -1;
 
-    ID rows(nTrip);
-    ID cols(nTrip);
-    Vector vals(nTrip);
-    theChannel->recvID(0, 0, rows);
-    theChannel->recvID(0, 0, cols);
-    theChannel->recvVector(0, 0, vals);
-    if (!merge || values == nullptr)
-        return 0;
-    return mergeTripletsInto(*values, &rows(0), &cols(0), &vals(0), nTrip);
+    const int numValues = values != nullptr ? static_cast<int>(values->size()) : 0;
+    auto offsetOf = [&](int row, int col) -> int {
+        const auto it = mergeIndexMap.find(packRC(row, col));
+        if (it == mergeIndexMap.end() || it->second >= numValues)
+            return -1;
+        return it->second;
+    };
+    return scatter.recvAndMerge(*theChannel, worker, header, merge && values != nullptr,
+                                values != nullptr ? values->data() : nullptr, offsetOf);
 }
 
 int
@@ -294,9 +233,11 @@ DistributedSparsePythonEigenSOE::setSize(Graph &theGraph)
         return -1;
     }
 
-    clearKTriplets();
-    clearMTriplets();
+    kTriplets.reset();
+    mTriplets.reset();
     mergeIndexMap.clear();
+    kScatter.reset(numChannels);
+    mScatter.reset(numChannels);
     numStoredModes = 0;
 
     int result = 0;
@@ -360,7 +301,7 @@ DistributedSparsePythonEigenSOE::addA(const Matrix &m, const ID &id, double fact
     if (thePythonSOE == nullptr)
         return -1;
     if (processID != 0)
-        return addMatrixWorker(kTripletMap, m, id, fact);
+        return addMatrixWorker(kTriplets, m, id, fact);
     return thePythonSOE->addA(m, id, fact);
 }
 
@@ -370,7 +311,7 @@ DistributedSparsePythonEigenSOE::addM(const Matrix &m, const ID &id, double fact
     if (thePythonSOE == nullptr)
         return -1;
     if (processID != 0)
-        return addMatrixWorker(mTripletMap, m, id, fact);
+        return addMatrixWorker(mTriplets, m, id, fact);
     return thePythonSOE->addM(m, id, fact);
 }
 
@@ -412,8 +353,8 @@ DistributedSparsePythonEigenSOE::solve(int numModes, bool generalized, bool find
         header(0) = sendMats ? 1 : -1;
         theChannel->sendID(0, 0, header);
         if (sendMats) {
-            sendTripletMap(theChannel, kTripletMap);
-            sendTripletMap(theChannel, mTripletMap);
+            sendTriplets(theChannel, kTriplets);
+            sendTriplets(theChannel, mTriplets);
         }
 
         theChannel->recvID(0, 0, result);
@@ -464,9 +405,9 @@ DistributedSparsePythonEigenSOE::solve(int numModes, bool generalized, bool find
             if (kVals == nullptr || mVals == nullptr)
                 result(0) = -1;
             const bool merge = result(0) == 0;
-            if (recvAndMergeTripletMap(theChannel, kVals, merge) < 0)
+            if (recvAndMergeTriplets(theChannel, kScatter, j, kVals, merge) < 0)
                 result(0) = -1;
-            if (recvAndMergeTripletMap(theChannel, mVals, merge) < 0)
+            if (recvAndMergeTriplets(theChannel, mScatter, j, mVals, merge) < 0)
                 result(0) = -1;
         }
     }

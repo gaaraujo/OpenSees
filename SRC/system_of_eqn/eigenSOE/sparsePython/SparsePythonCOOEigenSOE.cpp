@@ -37,6 +37,8 @@ SparsePythonCOOEigenSOE::getNumEqn(void) const
 void
 SparsePythonCOOEigenSOE::buildCOOPattern(Graph &theGraph)
 {
+    kCache.clear();
+    mCache.clear();
     const int size = theGraph.getNumVertex();
     if (size <= 0) {
         rowIndices.clear();
@@ -122,6 +124,8 @@ SparsePythonCOOEigenSOE::resizeVectors(int size)
     }
 
     rowOffsets.assign(static_cast<std::size_t>(size) + 1u, 0);
+    kCache.clear();
+    mCache.clear();
     rowIndices.clear();
     colIndices.clear();
     kValues.clear();
@@ -139,7 +143,9 @@ SparsePythonCOOEigenSOE::updateMatrixStatus()
 }
 
 int
-SparsePythonCOOEigenSOE::addA(const Matrix &m, const ID &id, double fact)
+SparsePythonCOOEigenSOE::addToMatrix(SparseSlotCache &cache, std::vector<double> &values,
+                                     const Matrix &m, const ID &id, double fact,
+                                     const char *caller)
 {
     if (fact == 0.0) {
         return 0;
@@ -147,7 +153,7 @@ SparsePythonCOOEigenSOE::addA(const Matrix &m, const ID &id, double fact)
 
     const int idSize = id.Size();
     if (idSize != m.noRows() || idSize != m.noCols()) {
-        opserr << "SparsePythonCOOEigenSOE::addA - Matrix and ID not of similar sizes\n";
+        opserr << "SparsePythonCOOEigenSOE::" << caller << " - Matrix and ID not of similar sizes\n";
         return -1;
     }
 
@@ -156,85 +162,45 @@ SparsePythonCOOEigenSOE::addA(const Matrix &m, const ID &id, double fact)
         return 0;
     }
 
-    for (int i = 0; i < idSize; ++i) {
+    // Columns within a row are sorted, so use binary search the first time;
+    // later assemblies replay the cached slots.
+    auto find = [&](int i, int j) -> int {
         const int row = id(i);
-        if (row < 0 || row >= size) {
-            continue;
+        const int col = id(j);
+        if (row < 0 || row >= size || col < 0 || col >= size) {
+            return SparseSlotCache::SKIP;
         }
-
-        const int start = rowOffsets[static_cast<std::size_t>(row)];
-        const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-        for (int j = 0; j < idSize; ++j) {
-            const int col = id(j);
-            if (col < 0 || col >= size) {
-                continue;
-            }
-
-            // Columns within a row are sorted, so use binary search.
-            auto rowBegin = colIndices.begin() + start;
-            auto rowEnd = colIndices.begin() + end;
-            auto it = std::lower_bound(rowBegin, rowEnd, col);
-            if (it != rowEnd && *it == col) {
-                kValues[static_cast<std::size_t>(it - colIndices.begin())] += fact * m(i, j);
-            }
+        auto rowBegin = colIndices.begin() + rowOffsets[static_cast<std::size_t>(row)];
+        auto rowEnd = colIndices.begin() + rowOffsets[static_cast<std::size_t>(row + 1)];
+        auto it = std::lower_bound(rowBegin, rowEnd, col);
+        if (it != rowEnd && *it == col) {
+            return static_cast<int>(it - colIndices.begin());
         }
-    }
+        return SparseSlotCache::SKIP;
+    };
+    cache.setCapacity(8 * values.size() + (std::size_t(1) << 20));
+    addWithCache(cache, m, id, fact, false, find, [&]() { return values.data(); });
 
     updateMatrixStatus();
     return 0;
 }
 
 int
+SparsePythonCOOEigenSOE::addA(const Matrix &m, const ID &id, double fact)
+{
+    return addToMatrix(kCache, kValues, m, id, fact, "addA");
+}
+
+int
 SparsePythonCOOEigenSOE::addM(const Matrix &m, const ID &id, double fact)
 {
-    if (fact == 0.0) {
-        return 0;
-    }
-
-    const int idSize = id.Size();
-    if (idSize != m.noRows() || idSize != m.noCols()) {
-        opserr << "SparsePythonCOOEigenSOE::addM - Matrix and ID not of similar sizes\n";
-        return -1;
-    }
-
-    const int size = getNumEqn();
-    if (size == 0 || rowOffsets.size() != static_cast<std::size_t>(size) + 1u) {
-        return 0;
-    }
-
-    for (int i = 0; i < idSize; ++i) {
-        const int row = id(i);
-        if (row < 0 || row >= size) {
-            continue;
-        }
-
-        const int start = rowOffsets[static_cast<std::size_t>(row)];
-        const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-        for (int j = 0; j < idSize; ++j) {
-            const int col = id(j);
-            if (col < 0 || col >= size) {
-                continue;
-            }
-
-            // Columns within a row are sorted, so use binary search.
-            auto rowBegin = colIndices.begin() + start;
-            auto rowEnd = colIndices.begin() + end;
-            auto it = std::lower_bound(rowBegin, rowEnd, col);
-            if (it != rowEnd && *it == col) {
-                mValues[static_cast<std::size_t>(it - colIndices.begin())] += fact * m(i, j);
-            }
-        }
-    }
-
-    updateMatrixStatus();
-    return 0;
+    return addToMatrix(mCache, mValues, m, id, fact, "addM");
 }
 
 void
 SparsePythonCOOEigenSOE::zeroA(void)
 {
+    kCache.rewind();
     std::fill(kValues.begin(), kValues.end(), 0.0);
     updateMatrixStatus();
 }
@@ -242,6 +208,7 @@ SparsePythonCOOEigenSOE::zeroA(void)
 void
 SparsePythonCOOEigenSOE::zeroM(void)
 {
+    mCache.rewind();
     std::fill(mValues.begin(), mValues.end(), 0.0);
     updateMatrixStatus();
 }

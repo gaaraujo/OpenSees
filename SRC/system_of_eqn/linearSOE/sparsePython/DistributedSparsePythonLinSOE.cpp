@@ -135,34 +135,6 @@ DistributedSparsePythonLinSOE::ensureWorkArea(int size)
     sizeWork = size;
 }
 
-void
-DistributedSparsePythonLinSOE::clearTriplets(void)
-{
-    tripletMap.clear();
-}
-
-int
-DistributedSparsePythonLinSOE::accumulateTriplet(int row, int col, double value)
-{
-    if (row < 0 || col < 0 || row >= myBsize || col >= myBsize)
-        return 0;
-
-    // With SYMMETRIC_LOWER storage rank 0 holds row >= col only.
-    if (lowerOnly && col > row)
-        return 0;
-
-    tripletMap[packRC(row, col)] += value;
-
-    if (auto *c = dynamic_cast<SparsePythonCompressedLinSOE *>(thePythonSOE)) {
-        if (c->getMatrixStatus() == SparsePythonMatrixStatus::UNCHANGED)
-            setInnerMatrixStatus(static_cast<int>(SparsePythonMatrixStatus::COEFFICIENTS_CHANGED));
-    } else if (auto *c = dynamic_cast<SparsePythonCOOLinSOE *>(thePythonSOE)) {
-        if (c->getMatrixStatus() == SparsePythonMatrixStatus::UNCHANGED)
-            setInnerMatrixStatus(static_cast<int>(SparsePythonMatrixStatus::COEFFICIENTS_CHANGED));
-    }
-    return 0;
-}
-
 int
 DistributedSparsePythonLinSOE::addAWorker(const Matrix &m, const ID &id, double fact)
 {
@@ -176,46 +148,10 @@ DistributedSparsePythonLinSOE::addAWorker(const Matrix &m, const ID &id, double 
         return -1;
     }
 
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, m(i, j)) != 0)
-                    return -1;
-            }
-        }
-    } else if (fact == -1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, -m(i, j)) != 0)
-                    return -1;
-            }
-        }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int globalRow = id(i);
-            if (globalRow < 0 || globalRow >= myBsize)
-                continue;
-            for (int j = 0; j < idSize; ++j) {
-                const int globalCol = id(j);
-                if (globalCol < 0 || globalCol >= myBsize)
-                    continue;
-                if (accumulateTriplet(globalRow, globalCol, fact * m(i, j)) != 0)
-                    return -1;
-            }
-        }
-    }
+    // With SYMMETRIC_LOWER storage rank 0 holds row >= col only.
+    if (localTriplets.add(m, id, fact, myBsize, lowerOnly) &&
+        getInnerMatrixStatus() == static_cast<int>(SparsePythonMatrixStatus::UNCHANGED))
+        setInnerMatrixStatus(static_cast<int>(SparsePythonMatrixStatus::COEFFICIENTS_CHANGED));
     return 0;
 }
 
@@ -266,36 +202,14 @@ DistributedSparsePythonLinSOE::buildMergeIndexMap(void)
     return -1;
 }
 
-int
-DistributedSparsePythonLinSOE::mergeTripletsIntoA(const int *rows, const int *cols,
-                                                  const double *vals, int nTrip)
+double *
+DistributedSparsePythonLinSOE::rootValues(void)
 {
-    if (nTrip <= 0)
-        return 0;
-    if (thePythonSOE == nullptr || rows == nullptr || cols == nullptr || vals == nullptr)
-        return -1;
-
-    double *A = nullptr;
     if (auto *c = dynamic_cast<SparsePythonCompressedLinSOE *>(thePythonSOE))
-        A = c->getValues().data();
-    else if (auto *c = dynamic_cast<SparsePythonCOOLinSOE *>(thePythonSOE))
-        A = c->getValues().data();
-
-    if (A == nullptr) {
-        opserr << "WARNING DistributedSparsePythonLinSOE::mergeTripletsIntoA() - no A values\n";
-        return -1;
-    }
-
-    for (int i = 0; i < nTrip; ++i) {
-        const auto it = mergeIndexMap.find(packRC(rows[i], cols[i]));
-        if (it == mergeIndexMap.end()) {
-            opserr << "WARNING DistributedSparsePythonLinSOE::mergeTripletsIntoA() - "
-                   << "no matrix entry for (" << rows[i] << ", " << cols[i] << ")\n";
-            return -1;
-        }
-        A[it->second] += vals[i];
-    }
-    return 0;
+        return c->getValues().data();
+    if (auto *c = dynamic_cast<SparsePythonCOOLinSOE *>(thePythonSOE))
+        return c->getValues().data();
+    return nullptr;
 }
 
 int
@@ -322,7 +236,8 @@ DistributedSparsePythonLinSOE::setSize(Graph &theGraph)
         return -1;
     }
 
-    clearTriplets();
+    localTriplets.reset();
+    rootScatter.reset(numChannels);
     mergeIndexMap.clear();
 
     lowerOnly = false;
@@ -471,7 +386,7 @@ DistributedSparsePythonLinSOE::setB(const Vector &v, double fact)
 void
 DistributedSparsePythonLinSOE::zeroA(void)
 {
-    clearTriplets();
+    localTriplets.zero();
     if (thePythonSOE != nullptr)
         thePythonSOE->zeroA();
 }
@@ -552,30 +467,15 @@ DistributedSparsePythonLinSOE::solve(void)
 
     if (processID != 0) {
         Channel *theChannel = theChannels[0];
-        const int nTrip = sendA ? static_cast<int>(tripletMap.size()) : 0;
         // Header after the RHS: -1 if the matrix is unchanged on this rank, else the
-        // number of triplets that follow. Rank 0 reads it instead of its own status,
-        // so the triplet messages cannot go unmatched.
-        myB[myBsize] = sendA ? static_cast<double>(nTrip) : -1.0;
+        // triplet count of SparseLocalTriplets::header() (n >= 0 full triplets, or
+        // -(n + 2) values only once rank 0 holds this rank's pattern). Rank 0 reads it
+        // instead of its own status, so the triplet messages cannot go unmatched.
+        myB[myBsize] = sendA ? static_cast<double>(localTriplets.header()) : -1.0;
         theChannel->sendVector(0, 0, *myVectBHeader);
 
-        if (sendA) {
-            if (nTrip > 0) {
-                ID rows(nTrip);
-                ID cols(nTrip);
-                Vector vals(nTrip);
-                int k = 0;
-                for (const auto &entry : tripletMap) {
-                    rows(k) = static_cast<int>(entry.first >> 32);
-                    cols(k) = static_cast<int>(entry.first & 0xffffffffu);
-                    vals(k) = entry.second;
-                    ++k;
-                }
-                theChannel->sendID(0, 0, rows);
-                theChannel->sendID(0, 0, cols);
-                theChannel->sendVector(0, 0, vals);
-            }
-        }
+        if (sendA)
+            localTriplets.send(*theChannel);
 
         theChannel->recvVector(0, 0, vectX);
         theChannel->recvVector(0, 0, vectB);
@@ -600,9 +500,8 @@ DistributedSparsePythonLinSOE::solve(void)
         theChannel->recvVector(0, 0, remoteBHeader);
         vectB += remoteB;
 
-        const double header = workArea[myBsize];
-        const bool workerSendsA = header >= 0.0;
-        const int nTrip = workerSendsA ? static_cast<int>(header) : 0;
+        const int header = static_cast<int>(workArea[myBsize]);
+        const bool workerSendsA = header != -1;
 
         if (workerSendsA != sendA) {
             // A rank skipped (or repeated) its assembly: fail on every rank instead
@@ -612,18 +511,12 @@ DistributedSparsePythonLinSOE::solve(void)
             result(0) = -1;
         }
 
-        if (nTrip > 0) {
-            ID rows(nTrip);
-            ID cols(nTrip);
-            Vector vals(nTrip);
-            theChannel->recvID(0, 0, rows);
-            theChannel->recvID(0, 0, cols);
-            theChannel->recvVector(0, 0, vals);
-            if (result(0) == 0 &&
-                mergeTripletsIntoA(&rows(0), &cols(0), &vals(0), nTrip) < 0) {
-                result(0) = -1;
-            }
-        }
+        auto offsetOf = [this](int row, int col) -> int {
+            const auto it = mergeIndexMap.find(packRC(row, col));
+            return it == mergeIndexMap.end() ? -1 : it->second;
+        };
+        if (rootScatter.recvAndMerge(*theChannel, j, header, result(0) == 0, rootValues(), offsetOf) < 0)
+            result(0) = -1;
     }
 
     if (result(0) == 0)
