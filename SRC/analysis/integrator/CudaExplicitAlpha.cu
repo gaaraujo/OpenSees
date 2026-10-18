@@ -105,6 +105,49 @@ __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, T *U, T 
     }
 }
 
+// y = d .* x and y = b ./ d for a diagonal mass matrix d.
+template<typename T>
+__global__ void kernelDiagMul(int n, const T *d, const T *x, T *y)
+{
+    const int stride = blockDim.x * gridDim.x;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
+        y[i] = d[i] * x[i];
+    }
+}
+
+template<typename T>
+__global__ void kernelDiagDiv(int n, const T *d, const T *b, T *y)
+{
+    const int stride = blockDim.x * gridDim.x;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
+        y[i] = b[i] / d[i];
+    }
+}
+
+// Diagonal of a CSR matrix whose off-diagonal stored entries are all exactly zero and whose diagonal
+// entries are all present and non-zero (a lumped mass matrix); false otherwise. One pass over nnz.
+static bool csrDiagonalOnly(int n, const int *rowPtr, const int *colIdx, const double *values,
+                            std::vector<double> &diag)
+{
+    if (n <= 0 || rowPtr == nullptr || colIdx == nullptr || values == nullptr)
+        return false;
+    diag.assign(static_cast<std::size_t>(n), 0.0);
+    for (int i = 0; i < n; ++i) {
+        bool found = false;
+        for (int k = rowPtr[i]; k < rowPtr[i + 1]; ++k) {
+            if (colIdx[k] == i) {
+                diag[i] = values[k];
+                found = true;
+            } else if (values[k] != 0.0) {
+                return false;
+            }
+        }
+        if (!found || diag[i] == 0.0)
+            return false;
+    }
+    return true;
+}
+
 static int gridBlocks(int n, int blockSize = 256)
 {
     return (n + blockSize - 1) / blockSize;
@@ -155,6 +198,8 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     thrust::device_vector<T> d_w2;           // workspace for M^{-1} and solves
     thrust::device_vector<T> d_alphaRhs;     // RHS for alpha-operator solve(s)
     thrust::device_vector<T> d_alphaSol;     // alphaSol1 = alpha^{-1} M Uddot_n
+    thrust::device_vector<T> d_massDiag;     // diagonal of M when M is diagonal (massDiagonal)
+    bool massDiagonal = false;               // M products and solves element-wise
     pinned_host_vector<double> h_state_cur;    // [U | Udot | Uddot]
     pinned_host_vector<double> h_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
     pinned_host_vector<double> h_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
@@ -358,7 +403,49 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         return 0;
     }
 
-    int applyM(const T *x, T *y) { return matM->spmv(x, y); }
+    int applyM(const T *x, T *y)
+    {
+        if (massDiagonal) {
+            kernelDiagMul<<<gridBlocks(size), 256, 0, stream>>>(size, raw_pointer_cast(d_massDiag.data()), x, y);
+            return 0;
+        }
+        return matM->spmv(x, y);
+    }
+
+    // y = M^{-1} b (on the integrator stream).
+    int solveM(void *b, T *y)
+    {
+        if (massDiagonal) {
+            kernelDiagDiv<<<gridBlocks(size), 256, 0, stream>>>(size, raw_pointer_cast(d_massDiag.data()),
+                                                                static_cast<const T *>(b), y);
+            return 0;
+        }
+        return matM->solve(b, y);
+    }
+
+    // Diagonal-M check on the merged host values of M (once per operator build).
+    void detectDiagonalMass(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE)
+    {
+        massDiagonal = false;
+        if (integrator->generalMass) {
+            return;
+        }
+        cudaSOE->syncAValuesToHost();
+        const int *csr = cudaSOE->getHostCsrIndicesData();
+        std::vector<double> diag;
+        if (csr == nullptr ||
+            !csrDiagonalOnly(size, csr, csr + size + 1, cudaSOE->getHostAValuesData(), diag)) {
+            return;
+        }
+        std::vector<T> diagT(diag.begin(), diag.end());
+        d_massDiag.assign(diagT.begin(), diagT.end());
+        massDiagonal = true;
+        static bool reported = false;
+        if (!reported) {
+            opserr << "CudaExplicitAlpha: diagonal mass matrix; M products and solves are element-wise\n";
+            reported = true;
+        }
+    }
 
     int formOperators(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) override
     {
@@ -404,6 +491,9 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
                 opserr << "ERROR CudaExplicitAlpha::formOperators - matM->copyValues failed\n";
                 gpuRc = -2;
             }
+        }
+        if (gpuRc == 0) {
+            detectDiagonalMass(integrator, cudaSOE);
         }
 
         // --- A_alpha (collective; snapshot only — factorize later) ---
@@ -518,7 +608,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         cudaSOE->setBPrimaryLocation(CudaBcsrLinSOE::DataLocation::Host);
         cudaSOE->syncBToDevice();
         void *b = cudaSOE->getDeviceB();
-        if (matM->solve(b, devUddot()) != 0) {
+        if (solveM(b, devUddot()) != 0) {
             return -2;
         }
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync after -initAccel start");
@@ -535,7 +625,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (matM == nullptr || !matM->isFactored()) {
             return -3;
         }
-        if (matM->solve(b, w2) != 0) {
+        if (solveM(b, w2) != 0) {
             return -3;
         }
         matAlpha->spmv(w2, b);
@@ -680,6 +770,8 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.noSecondPass = true;
         } else if (strcmp(tok, "-tangentAtStart") == 0) {
             opts.tangentAtStart = true;
+        } else if (strcmp(tok, "-generalMass") == 0) {
+            opts.generalMass = true;
         } else if (strcmp(tok, "-stiffnessFactor") == 0) {
             int one = 1;
             if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
@@ -690,7 +782,7 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
-                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s>\n";
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s> <-generalMass>\n";
             return false;
         }
     }
@@ -803,6 +895,7 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       noSecondPass(opts.noSecondPass),
       tangentAtStart(opts.tangentAtStart),
       stiffnessFactor(opts.stiffnessFactor),
+      generalMass(opts.generalMass),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),

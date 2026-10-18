@@ -45,6 +45,30 @@
 
 namespace {
 
+// Diagonal of a CSR matrix whose off-diagonal stored entries are all exactly zero and whose diagonal
+// entries are all present and non-zero (a lumped mass matrix); false otherwise. One pass over nnz.
+static bool csrDiagonalOnly(int n, const int *rowPtr, const int *colIdx, const double *values,
+                            std::vector<double> &diag)
+{
+    if (n <= 0 || rowPtr == nullptr || colIdx == nullptr || values == nullptr)
+        return false;
+    diag.assign(static_cast<std::size_t>(n), 0.0);
+    for (int i = 0; i < n; ++i) {
+        bool found = false;
+        for (int k = rowPtr[i]; k < rowPtr[i + 1]; ++k) {
+            if (colIdx[k] == i) {
+                diag[i] = values[k];
+                found = true;
+            } else if (values[k] != 0.0) {
+                return false;
+            }
+        }
+        if (!found || diag[i] == 0.0)
+            return false;
+    }
+    return true;
+}
+
 bool parseSparseExplicitAlphaOptions(SparseExplicitAlpha::Options &opts)
 {
     opts = SparseExplicitAlpha::Options{};
@@ -64,6 +88,8 @@ bool parseSparseExplicitAlphaOptions(SparseExplicitAlpha::Options &opts)
             opts.noSecondPass = true;
         } else if (strcmp(tok, "-tangentAtStart") == 0) {
             opts.tangentAtStart = true;
+        } else if (strcmp(tok, "-generalMass") == 0) {
+            opts.generalMass = true;
         } else if (strcmp(tok, "-stiffnessFactor") == 0) {
             int one = 1;
             if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
@@ -74,7 +100,7 @@ bool parseSparseExplicitAlphaOptions(SparseExplicitAlpha::Options &opts)
         } else {
             opserr << "WARNING SparseExplicitAlpha family - unknown flag " << tok
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel> <-noSecondPass>"
-                      " <-tangentAtStart> <-stiffnessFactor s>\n";
+                      " <-tangentAtStart> <-stiffnessFactor s> <-generalMass>\n";
             return false;
         }
     }
@@ -165,6 +191,8 @@ SparseExplicitAlpha::SparseExplicitAlpha(double _alphaF, double _alphaM, double 
       noSecondPass(opts.noSecondPass),
       tangentAtStart(opts.tangentAtStart),
       stiffnessFactor(opts.stiffnessFactor),
+      generalMass(opts.generalMass),
+      massDiagonal(false),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),
@@ -319,9 +347,14 @@ int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSpars
 
     if (formTangentIntoSOE(INITIAL_TANGENT, 0.0, 0.0, 1.0) != 0)
         return -1;
+    massDiagonal = false;
     if (root) {
         if (bindSharedStructure(csrSOE) != 0 || matM->copyValues(csrSOE->getAValuesData()) != 0)
             rc = -2;
+        // One pass over M: element-wise products and solves when M is diagonal.
+        if (rc == 0 && !generalMass)
+            massDiagonal = csrDiagonalOnly(csrSOE->getNumEqn(), csrSOE->getRowPtr(), csrSOE->getColIndices(),
+                                           csrSOE->getAValuesData(), massDiag);
     }
 
     if (formTangentIntoSOE(INITIAL_TANGENT, bdt2, gdt, 1.0) != 0)
@@ -370,8 +403,9 @@ int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSpars
 
     if (distSOE != nullptr) {
         // Workers wait here for rank 0's factorization (avoids hanging in the newStep broadcast).
+        // Status 2: M is diagonal, so the workers do not join M solves (distributed MUMPS).
         Vector status(1);
-        status(0) = (rc == 0) ? 1.0 : -1.0;
+        status(0) = (rc == 0) ? (massDiagonal ? 2.0 : 1.0) : -1.0;
         if (distSOE->broadcastFromRoot(status) < 0)
             return -6;
         if (status(0) < 0.0) {
@@ -379,6 +413,12 @@ int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSpars
                 opserr << "ERROR SparseExplicitAlpha::formOperators - rank 0 operator build failed\n";
             return -6;
         }
+        massDiagonal = status(0) > 1.5;
+    }
+    static bool reported = false;
+    if (root && rc == 0 && massDiagonal && !reported) {
+        opserr << "SparseExplicitAlpha: diagonal mass matrix; M products and solves are element-wise\n";
+        reported = true;
     }
     return rc;
 }
@@ -493,10 +533,10 @@ int SparseExplicitAlpha::applyStartCorrection(SparseCsrLinSOE *csrSOE, Distribut
     }
     if (isRoot(distSOE)) {
         Vector &b = csrSOE->getHostBVector();
-        const int rcSolve = (b.Size() > 0 && matM != nullptr) ? matM->solve(&b(0), &(*Udotdot)(0), 1) : -5;
+        const int rcSolve = (b.Size() > 0 && matM != nullptr) ? solveM(&b(0), &(*Udotdot)(0)) : -5;
         if (rc == 0)
             rc = rcSolve;
-    } else if (csrSOE->isCollectiveSolver()) {
+    } else if (csrSOE->isCollectiveSolver() && !massDiagonal) {
         rc = matM->solve(nullptr, nullptr, 1);  // join rank 0's M solve
     }
     if (distSOE != nullptr) {
@@ -521,8 +561,12 @@ int SparseExplicitAlpha::newStepPredictor(void)
     double *sol = alphaSol.data();
     const double *uddot = &(*Udotdot)(0);
 
-    if (matM->spmv(uddot, rhs) != 0)
+    if (massDiagonal) {
+        for (int i = 0; i < n; ++i)
+            rhs[i] = massDiag[i] * uddot[i];
+    } else if (matM->spmv(uddot, rhs) != 0) {
         return -5;
+    }
     if (matAlpha->solve(rhs, sol, 1) != 0)
         return -5;
     const double dt = deltaT;
@@ -636,15 +680,27 @@ int SparseExplicitAlpha::newStep(double _deltaT)
     return 0;
 }
 
+// Rank 0: y = M^{-1} b (element-wise when M is diagonal).
+int SparseExplicitAlpha::solveM(const double *b, double *y)
+{
+    if (massDiagonal) {
+        const int n = static_cast<int>(massDiag.size());
+        for (int i = 0; i < n; ++i)
+            y[i] = b[i] / massDiag[i];
+        return 0;
+    }
+    if (matM == nullptr || !matM->isFactored())
+        return -3;
+    return matM->solve(b, y, 1);
+}
+
 // Rank 0: B <- alpha * M^{-1} * Phat, in the system's B.
 int SparseExplicitAlpha::transformRhs(SparseCsrLinSOE *csrSOE)
 {
     Vector &b = csrSOE->getHostBVector();
     if (b.Size() == 0)
         return 0;
-    if (matM == nullptr || !matM->isFactored())
-        return -3;
-    if (matM->solve(&b(0), w2.data(), 1) != 0)
+    if (solveM(&b(0), w2.data()) != 0)
         return -3;
     return matAlpha->spmv(w2.data(), &b(0));
 }
@@ -671,7 +727,7 @@ int SparseExplicitAlpha::formUnbalance()
             const int rcT = transformRhs(csrSOE);
             if (rc == 0)
                 rc = rcT;
-        } else if (!isRoot(distSOE) && csrSOE->isCollectiveSolver() && !areAlphaMFClose()) {
+        } else if (!isRoot(distSOE) && csrSOE->isCollectiveSolver() && !areAlphaMFClose() && !massDiagonal) {
             rc = matM->solve(nullptr, nullptr, 1);  // join rank 0's M solve
         }
         Vector status(1);

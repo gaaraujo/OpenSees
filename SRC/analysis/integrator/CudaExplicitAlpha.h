@@ -44,6 +44,7 @@ public:
         bool noSecondPass = false;
         bool tangentAtStart = false;   // -tangentAtStart (see formEleTangent)
         double stiffnessFactor = 1.0;  // -stiffnessFactor s (see formEleTangent)
+        bool generalMass = false;      // -generalMass: always solve with M (no diagonal-M path)
     };
 
     CudaExplicitAlpha();
@@ -81,6 +82,7 @@ protected:
     bool noSecondPass;  // -noSecondPass (see update())
     bool tangentAtStart;     // -tangentAtStart (see formEleTangent)
     double stiffnessFactor;  // -stiffnessFactor (see formEleTangent)
+    bool generalMass;        // -generalMass: no element-wise path for a diagonal M
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     bool initAccel;     // -initAccel: start from the equilibrium acceleration M a0 = p - C v0 - f

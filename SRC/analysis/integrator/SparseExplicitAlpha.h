@@ -59,6 +59,7 @@ public:
         bool noSecondPass = false;
         bool tangentAtStart = false;   // -tangentAtStart (see formEleTangent)
         double stiffnessFactor = 1.0;  // -stiffnessFactor s (see formEleTangent)
+        bool generalMass = false;      // -generalMass: always solve with M (no diagonal-M path)
     };
 
     SparseExplicitAlpha();
@@ -93,6 +94,10 @@ private:
     bool noSecondPass;  // -noSecondPass (see update())
     bool tangentAtStart;     // -tangentAtStart (see formEleTangent)
     double stiffnessFactor;  // -stiffnessFactor (see formEleTangent)
+    bool generalMass;        // -generalMass: no element-wise path for a diagonal M
+    bool massDiagonal;       // M is diagonal: products and solves element-wise (all ranks agree)
+    std::vector<double> massDiag;  // rank 0: diagonal of M when massDiagonal
+    int solveM(const double *b, double *y);  // y = M^{-1} b (rank 0; workers join a collective solve)
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     bool initAccel;     // -initAccel: start from the equilibrium acceleration M a0 = p - C v0 - f
@@ -117,7 +122,7 @@ private:
     int boundRows, boundNnz;
     const int *boundRowPtr;
     const int *boundColIdx;
-    std::vector<double> alphaRhs, alphaSol, w2;  // [M Uddot | A Uddot], [alpha1 Uddot | alpha^{-1} A Uddot]
+    std::vector<double> alphaRhs, alphaSol, w2;  // M Uddot, alpha1 Uddot, M^{-1} Phat
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;
