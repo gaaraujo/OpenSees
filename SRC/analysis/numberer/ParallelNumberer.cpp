@@ -48,6 +48,9 @@
 #include <MP_ConstraintIter.h>
 #include <Node.h>
 
+#include <unordered_map>
+#include <unordered_set>
+
 
 ParallelNumberer::ParallelNumberer(int dTag, int numSub, Channel **theC) 
   :DOF_Numberer(NUMBERER_TAG_ParallelNumberer), 
@@ -230,6 +233,13 @@ ParallelNumberer::numberDOF(int lastDOF)
 
       // assign numbers based on the subdomains
 
+      // set of tags already placed, replacing theOrderedRefs->getLocation(),
+      // which is O(n) per call. The unfilled slots [loc, Size()) of
+      // theOrderedRefs hold 0, so tag 0 counts as present while any slot
+      // is unfilled, as with the linear search.
+      std::unordered_set<int> placed;
+      placed.reserve(2*theOrderedRefs->Size());
+
       int loc = 0;
       for (int l=0; l<numChannels; l++) {
 	const ID &theSubdomain = *theSubdomainIDs[l];
@@ -238,17 +248,25 @@ ParallelNumberer::numberDOF(int lastDOF)
 	for (int i=0; i<numVertexSubdomain; i++) {
 	  int vertexTagMerged = theSubdomain(i+numVertexSubdomain);
 	  //  int refTag = vertexRefs[vertexTags.getLocation(vertexTagMerged)];
-	  if (theOrderedRefs->getLocation(vertexTagMerged) == -1)
+	  bool found = (vertexTagMerged == 0 && loc < theOrderedRefs->Size())
+	    || placed.count(vertexTagMerged) != 0;
+	  if (!found) {
 	    (*theOrderedRefs)[loc++] = vertexTagMerged;
+	    placed.insert(vertexTagMerged);
+	  }
 	}
       }
 
       // now order those not yet ordered in p0
       for (int j=0; j<numVertexP0; j++) {
 	int refTagP0 = vertexTags[j];
-	if (theOrderedRefs->getLocation(refTagP0) == -1)
+	bool found = (refTagP0 == 0 && loc < theOrderedRefs->Size())
+	  || placed.count(refTagP0) != 0;
+	if (!found) {
 	  (*theOrderedRefs)[loc++] = refTagP0;
-      }	
+	  placed.insert(refTagP0);
+	}
+      }
     }
 
     int count = 0;
@@ -375,10 +393,18 @@ ParallelNumberer::mergeSubGraph(Graph &theGraph, Graph &theSubGraph, ID &vertexT
   int numVertex = theGraph.getNumVertex();
   int numVertexSub = theSubGraph.getNumVertex();
 
+  // ref -> first location in vertexRefs, replacing vertexRefs.getLocation(),
+  // which made the merge O(n^2) in the number of vertices
+  std::unordered_map<int, int> refLocation;
+  refLocation.reserve(2*(vertexRefs.Size() + numVertexSub));
+  for (int i=0; i<vertexRefs.Size(); i++)
+    refLocation.emplace(vertexRefs(i), i);
+
   while ((subVertexPtr = theSubGraphIter1()) != 0) {
     int vertexTagSub = subVertexPtr->getTag();
     int vertexTagRef = subVertexPtr->getRef();
-    int loc = vertexRefs.getLocation(vertexTagRef);
+    std::unordered_map<int, int>::const_iterator refIt = refLocation.find(vertexTagRef);
+    int loc = (refIt == refLocation.end()) ? -1 : refIt->second;
 
     int vertexTagMerged;
     if (loc < 0) {
@@ -389,6 +415,7 @@ ParallelNumberer::mergeSubGraph(Graph &theGraph, Graph &theSubGraph, ID &vertexT
       Vertex *newVertex = new Vertex(vertexTagMerged, vertexTagRef, subVertexPtr->getWeight(), subVertexPtr->getColor());
 
       theGraph.addVertex(newVertex);
+      refLocation.emplace(vertexTagRef, numVertex);
       numVertex++;
     } else
       vertexTagMerged = vertexTags[loc];
@@ -399,18 +426,27 @@ ParallelNumberer::mergeSubGraph(Graph &theGraph, Graph &theSubGraph, ID &vertexT
     count++;
   }
 
+  // subgraph tag -> first location in theSubdomainMap, replacing
+  // theSubdomainMap.getLocation(); a tag not found falls back to the linear search
+  std::unordered_map<int, int> subLocation;
+  subLocation.reserve(2*numVertexSub);
+  for (int i=0; i<count; i++)
+    subLocation.emplace(theSubdomainMap(i), i);
+
   // for each vertex in subgraph, we add it's adjacenecy into the merged graph
   VertexIter &theSubGraphIter2 = theSubGraph.getVertices();
   while ((subVertexPtr = theSubGraphIter2()) != 0) {
     int vertexTagSub = subVertexPtr->getTag();
-    int loc = theSubdomainMap.getLocation(vertexTagSub);
+    std::unordered_map<int, int>::const_iterator subIt = subLocation.find(vertexTagSub);
+    int loc = (subIt == subLocation.end()) ? theSubdomainMap.getLocation(vertexTagSub) : subIt->second;
     int vertexTagMerged = theSubdomainMap[loc+numVertexSub];
 
     const ID &adjacency = subVertexPtr->getAdjacency();
 
     for (int i=0; i<adjacency.Size(); i++) {
       int vertexTagSubAdjacent = adjacency(i);
-      int loc = theSubdomainMap.getLocation(vertexTagSubAdjacent);
+      subIt = subLocation.find(vertexTagSubAdjacent);
+      int loc = (subIt == subLocation.end()) ? theSubdomainMap.getLocation(vertexTagSubAdjacent) : subIt->second;
       int vertexTagMergedAdjacent = theSubdomainMap[loc+numVertexSub];      
       theGraph.addEdge(vertexTagMerged, vertexTagMergedAdjacent);
     }
