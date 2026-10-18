@@ -73,9 +73,10 @@ __global__ void kernelAxpy(int n, T alpha, const T *x, T *y)
 }
 
 // Midpoint predictor + alpha-interpolated response at t + alphaF*dt.
-// alphaSol1 holds alpha^{-1} M Uddot_n; alphaSol2 holds alpha_3 Uddot_n when alphaM != alphaF.
+// alphaSol1 holds alpha^{-1} M Uddot_n. Since A = alphaF*alpha + (alphaM - alphaF)*M,
+// alpha^{-1} A Uddot_n = alphaF*Uddot_n + (alphaM - alphaF)*alphaSol1: no second solve.
 template<typename T>
-__global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T *alphaSol2, T *U, T *Udot,
+__global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, T *U, T *Udot,
                               const T *Uddot, T *alphaSol1, T *Ualpha, T *Ualphadot, T *Ualphadotdot,
                               int incrementalAccel, int alphaClose)
 {
@@ -84,7 +85,8 @@ __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T 
         const T ut = U[i];
         const T utdot = Udot[i];
         const T utddot = Uddot[i];
-        const T uhat = dt * alphaSol1[i];  // Udot_hat = dt * alpha_1 * Uddot_n
+        const T sol1 = alphaSol1[i];
+        const T uhat = dt * sol1;  // Udot_hat = dt * alpha_1 * Uddot_n
         alphaSol1[i] = uhat;
         const T un1 = ut + dt * utdot + (static_cast<T>(0.5) + gamma) * dt * uhat;
         const T udotn1 = utdot + uhat;
@@ -98,7 +100,7 @@ __global__ void kernelNewStep(int n, T dt, T gamma, T alphaF, T alphaM, const T 
         } else if (alphaClose) {
             Ualphadotdot[i] = (static_cast<T>(1.0) - alphaM) * utddot;
         } else {
-            Ualphadotdot[i] = utddot - alphaSol2[i];  // alpha_3 * Uddot_n
+            Ualphadotdot[i] = utddot - (alphaF * utddot + (alphaM - alphaF) * sol1);  // alpha_3 * Uddot_n
         }
     }
 }
@@ -145,14 +147,14 @@ struct CudaExplicitAlpha::ImplBase {
 template<typename T>
 struct ImplT : CudaExplicitAlpha::ImplBase {
     int size = 0;
-    int alphaNumRhs = 2;  // 1 when alphaM ~= alphaF, or when incrementalAccel (alpha_3 unused)
+    int alphaNumRhs = 1;  // one RHS: alpha_3 Uddot_n follows from alpha^{-1} M Uddot_n
     int alphaLd = 0;      // column stride of d_alphaRhs / d_alphaSol (CuDSSBackend::denseLeadingDim)
 
     thrust::device_vector<T> d_state_cur;    // [U | Udot | Uddot]
     thrust::device_vector<T> d_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
     thrust::device_vector<T> d_w2;           // workspace for M^{-1} and solves
     thrust::device_vector<T> d_alphaRhs;     // RHS for alpha-operator solve(s)
-    thrust::device_vector<T> d_alphaSol;     // alphaSol1 [| alphaSol2]
+    thrust::device_vector<T> d_alphaSol;     // alphaSol1 = alpha^{-1} M Uddot_n
     pinned_host_vector<double> h_state_cur;    // [U | Udot | Uddot]
     pinned_host_vector<double> h_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
     pinned_host_vector<double> h_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
@@ -161,7 +163,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     cudaStream_t stream = nullptr;           // cached SOE stream from getCudaStream()
     CudaCsrMatrix *matM = nullptr;             // mass operator M
     CudaCsrMatrix *matAlpha = nullptr;         // alpha = M + gamma*dt*C + beta*dt^2*K
-    CudaCsrMatrix *matA = nullptr;             // A = alphaM*M + alphaF*gamma*dt*C + alphaF*beta*dt^2*K
+    CudaCsrMatrix *matA = nullptr;             // A = alphaM*M + alphaF*gamma*dt*C + alphaF*beta*dt^2*K (snapshot; the predictor no longer needs it)
     int boundStructureRows = 0;
     int boundStructureNnz = 0;
     const int *boundRowPtr = nullptr;
@@ -370,9 +372,8 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const double bdt2 = integrator->beta * integrator->deltaT * integrator->deltaT;
         const double gdt = integrator->gamma * integrator->deltaT;
         const bool areClose = integrator->areAlphaMFClose();
-        // alpha_3 column is only consumed by the non-incremental predictor kernel.
-        // Match ExplicitAlphaMultiSOE::newStep, which skips applyAlpha3 under -incrementalAccel.
-        const int numRhs = (areClose || integrator->incrementalAccel) ? 1 : 2;
+        // One RHS in every case: the predictor forms alpha_3 Uddot_n from alpha^{-1} M Uddot_n.
+        const int numRhs = 1;
         int gpuRc = 0;
 
         ensureAlphaBuffers(numRhs);
@@ -474,7 +475,6 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         T *dUdot = devUdot();
         T *dUddot = devUddot();
         T *dAlphaSol1 = thrust::raw_pointer_cast(d_alphaSol.data());
-        T *dAlphaSol2 = alphaNumRhs > 1 ? dAlphaSol1 + alphaLd : nullptr;
         T *dUalpha = devUalpha();
         T *dUalphadot = devUalphadot();
         T *dUalphadotdot = devUalphadotdot();
@@ -486,26 +486,14 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         const T alphaMT = static_cast<T>(integrator->alphaM);
         const bool alphaClose = integrator->areAlphaMFClose();
         const int incAccel = integrator->incrementalAccel ? 1 : 0;
-        // Need alpha_3 = I - alpha^{-1} A only for non-incremental trial accel when alphaM != alphaF.
-        const bool needAlpha3 = (incAccel == 0) && !alphaClose;
 
         applyM(dUddot, dAlphaRhs);
-        if (needAlpha3) {
-            matA->spmv(dUddot, dAlphaRhs + alphaLd);
-            if (matAlpha->solve(dAlphaRhs, dAlphaSol1, alphaNumRhs) != 0) {
-                return -5;
-            }
-            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dAlphaSol2, dU,
-                                                                dUdot, dUddot, dAlphaSol1, dUalpha, dUalphadot,
-                                                                dUalphadotdot, incAccel, 0);
-        } else {
-            if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
-                return -5;
-            }
-            kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(
-                size, dt, gammaT, alphaFT, alphaMT, static_cast<const T *>(nullptr), dU, dUdot, dUddot, dAlphaSol1,
-                dUalpha, dUalphadot, dUalphadotdot, incAccel, alphaClose ? 1 : 0);
+        if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
+            return -5;
         }
+        kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dU, dUdot, dUddot,
+                                                            dAlphaSol1, dUalpha, dUalphadot, dUalphadotdot, incAccel,
+                                                            alphaClose ? 1 : 0);
         // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
         cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
         // Host U/Udot are updated to n+1 here — required before OpenSeesMP broadcastFromRoot
@@ -975,7 +963,7 @@ int CudaExplicitAlpha::domainChanged()
         ensureDeviceImpl(cudaSOE);
         cudaSOE->setXSyncMode(false);  // keep X on device between solve and updateState
         m_impl->destroySolvers();
-        m_impl->allocate(size, (areAlphaMFClose() || incrementalAccel) ? 1 : 2);
+        m_impl->allocate(size, 1);
         const ImplBase::HostMotionPtrs buf = m_impl->ensureHostMotionBuffers(size);
         Ut->setData(buf.Ut, size);
         Utdot->setData(buf.Utdot, size);

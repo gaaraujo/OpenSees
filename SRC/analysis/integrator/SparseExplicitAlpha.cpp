@@ -302,7 +302,7 @@ int SparseExplicitAlpha::bindParticipants(SparseCsrLinSOE *csrSOE)
 
 int SparseExplicitAlpha::numAlphaRhs(void) const
 {
-    return (areAlphaMFClose() || incrementalAccel) ? 1 : 2;
+    return 1;  // alpha_3 Uddot_n follows from alpha^{-1} M Uddot_n (see newStepPredictor)
 }
 
 int SparseExplicitAlpha::formOperators(SparseCsrLinSOE *csrSOE, DistributedSparseCsrLinSOE *distSOE)
@@ -510,32 +510,28 @@ int SparseExplicitAlpha::applyStartCorrection(SparseCsrLinSOE *csrSOE, Distribut
     return rc;
 }
 
-// Predictor on rank 0: alpha_1 Uddot_n (and alpha^{-1} A Uddot_n) in one solve with alpha, then the
-// midpoint update and the alpha-interpolated kinematics (kernelNewStep of CudaExplicitAlpha).
+// Predictor on rank 0: alpha_1 Uddot_n in one solve with alpha, then the midpoint update and the
+// alpha-interpolated kinematics (kernelNewStep of CudaExplicitAlpha). Since
+// A = alphaF*alpha + (alphaM - alphaF)*M, alpha^{-1} A Uddot_n = alphaF*Uddot_n + (alphaM - alphaF)*sol.
 int SparseExplicitAlpha::newStepPredictor(void)
 {
     const int n = U->Size();
     const bool alphaClose = areAlphaMFClose();
-    const bool needAlpha3 = !incrementalAccel && !alphaClose;
     double *rhs = alphaRhs.data();
     double *sol = alphaSol.data();
     const double *uddot = &(*Udotdot)(0);
 
     if (matM->spmv(uddot, rhs) != 0)
         return -5;
-    if (needAlpha3) {
-        if (matA->spmv(uddot, rhs + n) != 0 || matAlpha->solve(rhs, sol, 2) != 0)
-            return -5;
-    } else if (matAlpha->solve(rhs, sol, 1) != 0) {
+    if (matAlpha->solve(rhs, sol, 1) != 0)
         return -5;
-    }
-    const double *sol2 = needAlpha3 ? sol + n : nullptr;
     const double dt = deltaT;
     for (int i = 0; i < n; ++i) {
         const double ut = (*U)(i);
         const double utdot = (*Udot)(i);
         const double utddot = (*Udotdot)(i);
-        const double uhat = dt * sol[i];  // Udot_hat = dt * alpha_1 * Uddot_n
+        const double sol1 = sol[i];
+        const double uhat = dt * sol1;  // Udot_hat = dt * alpha_1 * Uddot_n
         const double un1 = ut + dt * utdot + (0.5 + gamma) * dt * uhat;
         const double udotn1 = utdot + uhat;
         (*U)(i) = un1;
@@ -547,7 +543,7 @@ int SparseExplicitAlpha::newStepPredictor(void)
         else if (alphaClose)
             (*Ualphadotdot)(i) = (1.0 - alphaM) * utddot;
         else
-            (*Ualphadotdot)(i) = utddot - sol2[i];  // alpha_3 * Uddot_n
+            (*Ualphadotdot)(i) = utddot - (alphaF * utddot + (alphaM - alphaF) * sol1);  // alpha_3 * Uddot_n
     }
     return 0;
 }
