@@ -281,6 +281,7 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
 
         ensureMyBSize(numEqn);
         dofExchange.setLocal(theGraph, numEqn);
+        dofExchange.applyFullVectorsOption(numEqn);
         return 0;
     }
 
@@ -321,6 +322,7 @@ DistributedCudaBcsrLinSOE::setSize(Graph &theGraph)
 
     ensureMyBSize(numEqn);
     ensureWorkArea(numEqn);
+    dofExchange.applyFullVectorsOption(numEqn);
     return 0;
 }
 

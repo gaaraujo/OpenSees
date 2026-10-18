@@ -25,6 +25,10 @@
 //   untouched on the worker, so this is only for vectors that the worker uses
 //   through its own DOF IDs (the motion of an explicit integrator, or a solution
 //   that no convergence test reads).
+//
+// OPS_SOE_FULL_VECTORS=1 in the environment (same on every rank) makes every
+// rank's list hold all equations, i.e. the full-length messages of before, to
+// bisect a regression.
 
 #ifndef SparseDofExchange_h
 #define SparseDofExchange_h
@@ -37,6 +41,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
 #include <vector>
 
 class SparseDofExchange
@@ -56,6 +61,21 @@ public:
     {
         if (j >= 0 && j < static_cast<int>(workers.size()))
             workers[j] = vertexTags(theGraph, numEqn);
+    }
+
+    /** After setSize, on every rank: with OPS_SOE_FULL_VECTORS=1, every list becomes all numEqn
+     *  equations (full-length messages, as before the packed exchange). */
+    void applyFullVectorsOption(int numEqn)
+    {
+        const char *e = std::getenv("OPS_SOE_FULL_VECTORS");
+        if (e == nullptr || *e == '\0' || *e == '0')
+            return;
+        std::vector<int> all(static_cast<std::size_t>(numEqn > 0 ? numEqn : 0));
+        for (int i = 0; i < numEqn; ++i)
+            all[i] = i;
+        local = all;
+        for (std::vector<int> &w : workers)
+            w = all;
     }
 
     /** Worker -> rank 0: the RHS b (n entries) packed at the local DOFs, a dense flag, then nExtra

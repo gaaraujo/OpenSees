@@ -183,6 +183,7 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
             return -1;
         ensureMyBSize(data(0));
         dofExchange.setLocal(theGraph, data(0));
+        dofExchange.applyFullVectorsOption(data(0));
         return 0;
     }
 
@@ -205,6 +206,7 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
         return -1;
     ensureMyBSize(data(0));
     ensureWorkArea(data(0) + 1);
+    dofExchange.applyFullVectorsOption(data(0));
     return 0;
 }
 
