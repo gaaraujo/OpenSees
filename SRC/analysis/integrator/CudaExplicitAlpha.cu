@@ -180,6 +180,10 @@ struct CudaExplicitAlpha::ImplBase {
     virtual int formOperators(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) = 0;
     virtual HostMotionPtrs ensureHostMotionBuffers(int n) = 0;
     virtual int newStepPredictor(CudaExplicitAlpha *integrator) = 0;
+    virtual int launchPredictor(CudaExplicitAlpha *integrator) = 0;
+    virtual int finishPredictor() = 0;
+    virtual void discardPredictor() = 0;
+    virtual bool predictorInFlight() const = 0;
     virtual int formUnbalance(CudaBcsrLinSOE *cudaSOE) = 0;
     virtual int updateState(CudaBcsrLinSOE *cudaSOE, bool incrementalAccel) = 0;
     virtual int applyStart(CudaExplicitAlpha *integrator, CudaBcsrLinSOE *cudaSOE) = 0;
@@ -203,6 +207,8 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
     pinned_host_vector<double> h_state_cur;    // [U | Udot | Uddot]
     pinned_host_vector<double> h_state_prev;   // [Ut | Utdot | Utdotdot] step-start backup
     pinned_host_vector<double> h_state_alpha;  // [Ualpha | Ualphadot | Ualphadotdot]
+    pinned_host_vector<double> h_stage;        // [U | Udot] of a predictor launched early (launchPredictor)
+    bool inFlight = false;                     // launchPredictor work not yet consumed
 
     cusparseHandle_t cusparseHandle = nullptr;
     cudaStream_t stream = nullptr;           // cached SOE stream from getCudaStream()
@@ -561,15 +567,25 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
             d_state_cur = h_state_cur;
             integrator->deviceMotionStale = false;
         }
-        T *dU = devU();
-        T *dUdot = devUdot();
+        if (enqueuePredictor(integrator) != 0) {
+            return -5;
+        }
+        // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
+        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
+        // Host U/Udot are updated to n+1 here — required before OpenSeesMP broadcastFromRoot
+        // so workers (who may own recorded nodes) setDisp the predicted displacement.
+        // The predictor leaves Uddot unchanged (host and device agree): download U and Udot only.
+        thrust::copy(d_state_cur.begin(), d_state_cur.begin() + 2 * size, h_state_cur.begin());
+        h_state_alpha = d_state_alpha;
+        return 0;
+    }
+
+    // Predictor kernels on the integrator stream (no synchronization).
+    int enqueuePredictor(CudaExplicitAlpha *integrator)
+    {
         T *dUddot = devUddot();
         T *dAlphaSol1 = thrust::raw_pointer_cast(d_alphaSol.data());
-        T *dUalpha = devUalpha();
-        T *dUalphadot = devUalphadot();
-        T *dUalphadotdot = devUalphadotdot();
         T *dAlphaRhs = thrust::raw_pointer_cast(d_alphaRhs.data());
-
         const T dt = static_cast<T>(integrator->deltaT);
         const T gammaT = static_cast<T>(integrator->gamma);
         const T alphaFT = static_cast<T>(integrator->alphaF);
@@ -581,18 +597,53 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
         if (matAlpha->solve(dAlphaRhs, dAlphaSol1, 1) != 0) {
             return -5;
         }
-        kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, dU, dUdot, dUddot,
-                                                            dAlphaSol1, dUalpha, dUalphadot, dUalphadotdot, incAccel,
-                                                            alphaClose ? 1 : 0);
-        // All predictor ops share integrator stream; sync once before Thrust D2H host mirror update.
-        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync before host read");
-        // Host U/Udot are updated to n+1 here — required before OpenSeesMP broadcastFromRoot
-        // so workers (who may own recorded nodes) setDisp the predicted displacement.
-        // The predictor leaves Uddot unchanged (host and device agree): download U and Udot only.
-        thrust::copy(d_state_cur.begin(), d_state_cur.begin() + 2 * size, h_state_cur.begin());
-        h_state_alpha = d_state_alpha;
+        kernelNewStep<<<gridBlocks(size), 256, 0, stream>>>(size, dt, gammaT, alphaFT, alphaMT, devU(), devUdot(),
+                                                            dUddot, dAlphaSol1, devUalpha(), devUalphadot(),
+                                                            devUalphadotdot(), incAccel, alphaClose ? 1 : 0);
         return 0;
     }
+
+    // Early predictor for the next step, launched at the end of update() (double precision only): the
+    // GPU runs it while the host commits. U and Udot go to a staging buffer (the host U/Udot are the
+    // step-start backup of the next newStep); the alpha-level motion goes straight to its host mirror,
+    // which nothing reads before the next newStep.
+    int launchPredictor(CudaExplicitAlpha *integrator) override
+    {
+        if (sizeof(T) != sizeof(double) || size <= 0 || integrator->deviceMotionStale) {
+            return -1;
+        }
+        h_stage.resize(static_cast<std::size_t>(2) * size);
+        if (enqueuePredictor(integrator) != 0) {
+            return -5;
+        }
+        const std::size_t bytes = static_cast<std::size_t>(size) * sizeof(double);
+        cudaMemcpyAsync(raw_pointer_cast(h_stage.data()), devU(), 2 * bytes, cudaMemcpyDeviceToHost, stream);
+        cudaMemcpyAsync(raw_pointer_cast(h_state_alpha.data()), devUalpha(), 3 * bytes, cudaMemcpyDeviceToHost,
+                        stream);
+        inFlight = true;
+        return 0;
+    }
+
+    // Wait for the early predictor and move U/Udot into the host mirror (same values as newStepPredictor).
+    int finishPredictor() override
+    {
+        cudaCheckError(cudaStreamSynchronize(stream), "integrator stream sync for the early predictor");
+        inFlight = false;
+        std::memcpy(raw_pointer_cast(h_state_cur.data()), raw_pointer_cast(h_stage.data()),
+                    static_cast<std::size_t>(2) * size * sizeof(double));
+        return 0;
+    }
+
+    // Drop an early predictor (its device U/Udot are ahead of the host: the caller re-uploads).
+    void discardPredictor() override
+    {
+        if (inFlight && stream != nullptr) {
+            cudaStreamSynchronize(stream);
+        }
+        inFlight = false;
+    }
+
+    bool predictorInFlight() const override { return inFlight; }
 
     // -initAccel start: host B holds R0 = p - C v0 - f(u0, v0) (zero trial accel).
     // a0 = M^{-1} R0. Host mirror refreshed.
@@ -667,6 +718,7 @@ struct ImplT : CudaExplicitAlpha::ImplBase {
 
     void zeroState() override
     {
+        discardPredictor();
         if (size <= 0) {
             return;
         }
@@ -706,6 +758,7 @@ void CudaExplicitAlpha::ensureDeviceImpl(CudaBcsrLinSOE *cudaSOE)
 
 int CudaExplicitAlpha::formOperators(CudaBcsrLinSOE *cudaSOE)
 {
+    ++stateEpoch;
     const double bdt2 = beta * deltaT * deltaT;
     const double gdt = gamma * deltaT;
     const bool areClose = areAlphaMFClose();
@@ -772,6 +825,8 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
             opts.tangentAtStart = true;
         } else if (strcmp(tok, "-generalMass") == 0) {
             opts.generalMass = true;
+        } else if (strcmp(tok, "-noPredictorOverlap") == 0) {
+            opts.noPredictorOverlap = true;
         } else if (strcmp(tok, "-stiffnessFactor") == 0) {
             int one = 1;
             if (OPS_GetNumRemainingInputArgs() < 1 || OPS_GetDoubleInput(&one, &opts.stiffnessFactor) != 0 ||
@@ -782,7 +837,8 @@ bool parseCudaExplicitAlphaOptions(CudaExplicitAlpha::Options &opts)
         } else {
             opserr << "WARNING CudaExplicitAlpha family - unknown flag " << tok
                    << "; want <-updateElemDisp> <-incrementalAccel> <-alphaCloseCheck> <-initAccel>"
-                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s> <-generalMass>\n";
+                      " <-noSecondPass> <-tangentAtStart> <-stiffnessFactor s> <-generalMass>"
+                      " <-noPredictorOverlap>\n";
             return false;
         }
     }
@@ -896,6 +952,7 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       tangentAtStart(opts.tangentAtStart),
       stiffnessFactor(opts.stiffnessFactor),
       generalMass(opts.generalMass),
+      noPredictorOverlap(opts.noPredictorOverlap),
       incrementalAccel(opts.incrementalAccel),
       useAlphaCloseCheck(opts.useAlphaCloseCheck),
       initAccel(opts.initAccel),
@@ -918,6 +975,9 @@ CudaExplicitAlpha::CudaExplicitAlpha(int classTag, double _alphaF, double _alpha
       operatorsBuilt(false),
       motionNeedsGather(true),
       deviceMotionStale(true),
+      stateEpoch(0),
+      predictorEpoch(-1),
+      predictorDt(0.0),
       m_impl(nullptr)
 {
 }
@@ -1052,6 +1112,10 @@ int CudaExplicitAlpha::domainChanged()
     }
 
     const bool deviceOn = cudaSOE->isCudaDeviceEnabled();
+    ++stateEpoch;
+    if (m_impl != nullptr) {
+        m_impl->discardPredictor();
+    }
     if (deviceOn) {
         ensureDeviceImpl(cudaSOE);
         cudaSOE->setXSyncMode(false);  // keep X on device between solve and updateState
@@ -1211,6 +1275,7 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         }
         motionNeedsGather = false;
         deviceMotionStale = true;  // host motion may have gained remote DOFs
+        ++stateEpoch;
     }
 
     *Ut = *U;
@@ -1238,13 +1303,24 @@ int CudaExplicitAlpha::newStep(double _deltaT)
             return -7;
         }
         startPending = false;
+        ++stateEpoch;
         *Ut = *U;
         *Utdot = *Udot;
         *Utdotdot = *Udotdot;
     }
 
     if (deviceOn) {
-        if (m_impl->newStepPredictor(this) != 0) {
+        // Use the predictor launched at the end of the previous update() if nothing changed since.
+        bool predicted = false;
+        if (m_impl->predictorInFlight()) {
+            if (predictorEpoch == stateEpoch && predictorDt == deltaT && !deviceMotionStale) {
+                predicted = m_impl->finishPredictor() == 0;
+            } else {
+                m_impl->discardPredictor();
+                deviceMotionStale = true;  // device U/Udot were advanced by the dropped predictor
+            }
+        }
+        if (!predicted && m_impl->newStepPredictor(this) != 0) {
             opserr << "ERROR CudaExplicitAlpha::newStep() - newStepPredictor failed\n";
             return -5;
         }
@@ -1373,6 +1449,13 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
         if (m_impl == nullptr || m_impl->updateState(cudaSOE, incrementalAccel) != 0) {
             return -4;
         }
+        // Start the next step's predictor now (it needs only the new motion and the operators), so the
+        // GPU runs it while the host finishes this step; newStep checks that nothing changed since.
+        if (!noPredictorOverlap && !m_deviceUsesFloat && operatorsBuilt &&
+            m_impl->launchPredictor(this) == 0) {
+            predictorEpoch = stateEpoch;
+            predictorDt = deltaT;
+        }
     } else {
         // Worker: X already broadcast on host by DistributedCudaBcsrLinSOE::solve.
         if (incrementalAccel) {
@@ -1432,6 +1515,7 @@ int CudaExplicitAlpha::revertToLastStep()
     }
     motionNeedsGather = true;
     deviceMotionStale = true;
+    ++stateEpoch;
     return 0;
 }
 
@@ -1499,5 +1583,6 @@ int CudaExplicitAlpha::revertToStart()
     }
     startPending = true;
     deviceMotionStale = true;
+    ++stateEpoch;
     return 0;
 }

@@ -45,6 +45,7 @@ public:
         bool tangentAtStart = false;   // -tangentAtStart (see formEleTangent)
         double stiffnessFactor = 1.0;  // -stiffnessFactor s (see formEleTangent)
         bool generalMass = false;      // -generalMass: always solve with M (no diagonal-M path)
+        bool noPredictorOverlap = false;  // -noPredictorOverlap: predictor only inside newStep
     };
 
     CudaExplicitAlpha();
@@ -83,6 +84,7 @@ protected:
     bool tangentAtStart;     // -tangentAtStart (see formEleTangent)
     double stiffnessFactor;  // -stiffnessFactor (see formEleTangent)
     bool generalMass;        // -generalMass: no element-wise path for a diagonal M
+    bool noPredictorOverlap;  // -noPredictorOverlap: no early predictor launch at the end of update()
     bool incrementalAccel;
     bool useAlphaCloseCheck;
     bool initAccel;     // -initAccel: start from the equilibrium acceleration M a0 = p - C v0 - f
@@ -110,6 +112,12 @@ protected:
     /** True when host U/Udot/Uddot were written without updating the GPU mirror
      *  (domainChanged, revert, gather). Cleared after newStepPredictor H2D. */
     bool deviceMotionStale;
+    /** Incremented whenever the motion or the operators change outside the regular step
+     *  (domainChanged, revert, gather, operator build, -initAccel start). A predictor launched
+     *  at the end of update() is used by the next newStep only if the epoch and deltaT match. */
+    long stateEpoch;
+    long predictorEpoch;
+    double predictorDt;
 
     static constexpr double toleranceAlphaMF = 1.0e-8;
     bool areAlphaMFClose() const;
