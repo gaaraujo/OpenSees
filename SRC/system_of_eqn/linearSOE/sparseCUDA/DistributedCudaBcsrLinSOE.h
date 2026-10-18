@@ -18,6 +18,7 @@
 
 #include <LinearSOE.h>
 #include <SparseAssemblyCache.h>
+#include <SparseDofExchange.h>
 #include <Vector.h>
 
 #include <cstdint>
@@ -85,6 +86,16 @@ public:
     /** Collective merge of local myB into rank-0 host B (same protocol as getB/solve). */
     int mergeBToRoot(void);
 
+    /** Collective: P0 sends the entries of the nv vectors at each worker's DOFs (one message per
+     *  worker); workers overwrite those entries and leave the rest untouched. For vectors that the
+     *  workers use only through their own DOF IDs (an explicit integrator's motion). */
+    int scatterLocalFromRoot(Vector *const *v, int nv);
+
+    /** Set on all ranks before solve(): workers then receive X (and B) only at their own DOFs.
+     *  For a solution that the workers use only through their DOF IDs (Linear algorithm, no
+     *  convergence test). Cleared at the end of solve(). */
+    void setLocalSolution(bool local) { localSolution = local; }
+
     /** Mark that rank 0 already holds the global RHS on the GPU device.
      *  When set on all ranks before solve(), DistCuDSS skips the host myB gather
      *  and the post-solve B broadcast (CudaMKR-style). Default Newton path leaves
@@ -136,6 +147,14 @@ private:
     SparseRootScatter rootScatter;
 
     bool globalRhsOnDevice;
+
+    /** Rank-local DOF lists (setSize) for the packed RHS gather and the local scatters. */
+    SparseDofExchange dofExchange;
+    /** Worker: myB was set as a whole by setB() since the last zeroB() (sent in full). */
+    bool myBDense;
+    bool localSolution;
+    /** Worker: X entries outside the own DOFs are stale after a local solve (zeroed once). */
+    bool lastSolveLocal;
 };
 
 #endif

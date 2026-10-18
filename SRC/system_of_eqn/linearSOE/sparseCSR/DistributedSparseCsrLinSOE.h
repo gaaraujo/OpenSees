@@ -20,6 +20,7 @@
 
 #include <LinearSOE.h>
 #include <SparseAssemblyCache.h>
+#include <SparseDofExchange.h>
 #include <cstdint>
 #include <unordered_map>
 
@@ -71,6 +72,14 @@ public:
     /** Collective: sum the local RHS of every rank into rank 0's B. */
     int mergeBToRoot(void);
 
+    // Collective: rank 0 sends the entries of the nv vectors at each worker's DOFs (one message per
+    // worker); workers overwrite those entries only (an explicit integrator's motion).
+    int scatterLocalFromRoot(Vector *const *v, int nv);
+
+    // Set on all ranks before solve(): workers receive X (and B) only at their own DOFs (Linear
+    // algorithm, no convergence test reading X). Cleared at the end of solve().
+    void setLocalSolution(bool local) { localSolution = local; }
+
     /** Rank 0 already holds the global RHS in its B (set on every rank before solve()): solve()
      *  skips the RHS merge and the B broadcast (SparseExplicitAlpha). Cleared at the end of solve(). */
     void setGlobalRhsReady(bool ready) { globalRhsReady = ready; }
@@ -106,6 +115,10 @@ private:
     SparseRootScatter rootScatter;                    // rank 0: per worker, slot -> offset in A values
 
     bool globalRhsReady;
+    SparseDofExchange dofExchange;  // rank-local DOF lists (setSize): packed RHS gather, local scatters
+    bool myBDense;                  // worker: myB set as a whole by setB() since the last zeroB()
+    bool localSolution;
+    bool lastSolveLocal;            // worker: X outside the own DOFs is stale after a local solve
 };
 
 #endif

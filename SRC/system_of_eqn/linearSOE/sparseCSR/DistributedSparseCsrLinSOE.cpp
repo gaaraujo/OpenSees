@@ -22,6 +22,13 @@
 #include <classTags.h>
 #include <OPS_Globals.h>
 
+#include <climits>
+#include <vector>
+
+namespace {
+double *dataOf(Vector &v) { return v.Size() > 0 ? &v(0) : nullptr; }
+}
+
 bool OPS_ParseSparseCsrOptions(CsrMatrix::Solver &solver, double &tol, bool &solverOnRoot);
 
 void *OPS_DistributedSparseCsrLinSOE(void)
@@ -49,7 +56,8 @@ DistributedSparseCsrLinSOE::DistributedSparseCsrLinSOE(SparseCsrLinSOE *theSOE)
       processID(0), numChannels(0), theChannels(0),
       workArea(0), sizeWork(0),
       myB(0), myVectB(0), myVectBHeader(0), myBsize(0),
-      globalRhsReady(false)
+      globalRhsReady(false),
+      myBDense(false), localSolution(false), lastSolveLocal(false)
 {
 }
 
@@ -154,6 +162,9 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
     localTriplets.reset();
     rootScatter.reset(numChannels);
     mergeIndexMap.clear();
+    dofExchange.reset(processID == 0 ? numChannels : 0);
+    myBDense = false;
+    lastSolveLocal = false;
 
     if (processID != 0) {
         if (numChannels < 1 || theChannels == 0 || theChannels[0] == 0) {
@@ -171,6 +182,7 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
         if (theCsrSOE->resizeHostVectors(data(0)) < 0)
             return -1;
         ensureMyBSize(data(0));
+        dofExchange.setLocal(theGraph, data(0));
         return 0;
     }
 
@@ -178,6 +190,7 @@ DistributedSparseCsrLinSOE::setSize(Graph &theGraph)
     for (int j = 0; j < numChannels; ++j) {
         Graph theSubGraph;
         theSubGraph.recvSelf(0, *theChannels[j], theBroker);
+        dofExchange.setWorker(j, theSubGraph, INT_MAX);
         theGraph.merge(theSubGraph);
     }
     const int result = theCsrSOE->setSize(theGraph);
@@ -242,6 +255,8 @@ DistributedSparseCsrLinSOE::setB(const Vector &v, double fact)
                << ", vector " << v.Size() << ")\n";
         return -1;
     }
+    if (processID != 0)
+        myBDense = true;  // the whole vector, not only this rank's DOFs: sent in full
     for (int i = 0; i < myBsize; ++i)
         myB[i] = fact * v(i);
     return 0;
@@ -260,6 +275,7 @@ DistributedSparseCsrLinSOE::zeroB(void)
 {
     for (int i = 0; i < myBsize; ++i)
         myB[i] = 0.0;
+    myBDense = false;
 }
 
 const Vector &
@@ -273,17 +289,13 @@ DistributedSparseCsrLinSOE::getB(void)
 {
     Vector &vectB = theCsrSOE->getHostBVector();
     if (processID != 0) {
-        theChannels[0]->sendVector(0, 0, *myVectB);
+        dofExchange.sendRhs(*theChannels[0], myB, myBsize, myBDense, nullptr, 0);
         theChannels[0]->recvVector(0, 0, vectB);
         return vectB;
     }
     vectB = *myVectB;
-    ensureWorkArea(myBsize + 1);
-    Vector remoteB(workArea, myBsize);
-    for (int j = 0; j < numChannels; ++j) {
-        theChannels[j]->recvVector(0, 0, remoteB);
-        vectB += remoteB;
-    }
+    for (int j = 0; j < numChannels; ++j)
+        dofExchange.recvAddRhs(*theChannels[j], j, dataOf(vectB), myBsize, nullptr, 0);
     for (int j = 0; j < numChannels; ++j)
         theChannels[j]->sendVector(0, 0, vectB);
     return vectB;
@@ -326,8 +338,8 @@ DistributedSparseCsrLinSOE::solve(void)
         if (!skipBMerge) {
             // Header after the RHS: -1 if the matrix is unchanged on this rank, else the number of
             // triplets that follow. Rank 0 reads it instead of its own status.
-            myB[myBsize] = sendA ? static_cast<double>(nTrip) : -1.0;
-            theChannel->sendVector(0, 0, *myVectBHeader);
+            const double header = sendA ? static_cast<double>(nTrip) : -1.0;
+            dofExchange.sendRhs(*theChannel, myB, myBsize, myBDense, &header, 1);
         } else if (sendA) {
             ID nTripID(1);
             nTripID(0) = nTrip;
@@ -339,13 +351,29 @@ DistributedSparseCsrLinSOE::solve(void)
         if (theCsrSOE->isCollectiveSolver())
             theCsrSOE->solve();
 
-        theChannel->recvVector(0, 0, vectX);
-        if (!skipBMerge)
-            theChannel->recvVector(0, 0, vectB);
-        theChannel->recvID(0, 0, result);
+        if (localSolution) {
+            // X (and B) at this rank's DOFs and the status in one message (the other entries are
+            // not used; zeroed when switching from full solutions).
+            if (!lastSolveLocal) {
+                vectX.Zero();
+                if (!skipBMerge)
+                    vectB.Zero();
+            }
+            double *v[2] = {dataOf(vectX), dataOf(vectB)};
+            double status = -1.0;
+            dofExchange.recvLocal(*theChannel, v, skipBMerge ? 1 : 2, &status, 1);
+            result(0) = static_cast<int>(status);
+        } else {
+            theChannel->recvVector(0, 0, vectX);
+            if (!skipBMerge)
+                theChannel->recvVector(0, 0, vectB);
+            theChannel->recvID(0, 0, result);
+        }
+        lastSolveLocal = localSolution;
         if (result(0) == 0)
             theCsrSOE->setMatrixStatus(SparseCsrLinSOE::MatrixStatus::UNCHANGED);
         globalRhsReady = false;
+        localSolution = false;
         return result(0);
     }
 
@@ -353,17 +381,15 @@ DistributedSparseCsrLinSOE::solve(void)
     if (!skipBMerge)
         vectB = *myVectB;
 
-    ensureWorkArea(myBsize + 1);
-    Vector remoteBHeader(workArea, myBsize + 1);
-    Vector remoteB(workArea, myBsize);
     for (int j = 0; j < numChannels; ++j) {
         Channel *theChannel = theChannels[j];
         int nTrip = 0;
         bool workerSendsA = sendA;
         if (!skipBMerge) {
-            theChannel->recvVector(0, 0, remoteBHeader);
-            vectB += remoteB;
-            const int header = static_cast<int>(workArea[myBsize]);
+            double headerValue = -1.0;
+            if (dofExchange.recvAddRhs(*theChannel, j, dataOf(vectB), myBsize, &headerValue, 1) < 0)
+                result(0) = -1;
+            const int header = static_cast<int>(headerValue);
             workerSendsA = header != -1;
             nTrip = workerSendsA ? header : 0;
         } else if (sendA) {
@@ -389,14 +415,22 @@ DistributedSparseCsrLinSOE::solve(void)
         result(0) = theCsrSOE->solve();
     }
 
-    for (int j = 0; j < numChannels; ++j) {
-        Channel *theChannel = theChannels[j];
-        theChannel->sendVector(0, 0, vectX);
-        if (!skipBMerge)
-            theChannel->sendVector(0, 0, vectB);
-        theChannel->sendID(0, 0, result);
+    if (localSolution) {
+        const double *v[2] = {dataOf(vectX), dataOf(vectB)};
+        const double status = static_cast<double>(result(0));
+        for (int j = 0; j < numChannels; ++j)
+            dofExchange.sendLocal(*theChannels[j], j, v, skipBMerge ? 1 : 2, &status, 1);
+    } else {
+        for (int j = 0; j < numChannels; ++j) {
+            Channel *theChannel = theChannels[j];
+            theChannel->sendVector(0, 0, vectX);
+            if (!skipBMerge)
+                theChannel->sendVector(0, 0, vectB);
+            theChannel->sendID(0, 0, result);
+        }
     }
     globalRhsReady = false;
+    localSolution = false;
     return result(0);
 }
 
@@ -488,15 +522,30 @@ DistributedSparseCsrLinSOE::mergeBToRoot(void)
         return 0;
     }
     if (processID != 0)
-        return theChannels[0]->sendVector(0, 0, *myVectB) < 0 ? -1 : 0;
+        return dofExchange.sendRhs(*theChannels[0], myB, myBsize, myBDense, nullptr, 0);
     vectB = *myVectB;
-    ensureWorkArea(myBsize + 1);
-    Vector remoteB(workArea, myBsize);
-    for (int j = 0; j < numChannels; ++j) {
-        if (theChannels[j]->recvVector(0, 0, remoteB) < 0)
+    for (int j = 0; j < numChannels; ++j)
+        if (dofExchange.recvAddRhs(*theChannels[j], j, dataOf(vectB), myBsize, nullptr, 0) < 0)
             return -1;
-        vectB += remoteB;
+    return 0;
+}
+
+int
+DistributedSparseCsrLinSOE::scatterLocalFromRoot(Vector *const *v, int nv)
+{
+    if (numChannels <= 0 || theChannels == 0)
+        return 0;
+    std::vector<double *> data(static_cast<std::size_t>(nv));
+    for (int a = 0; a < nv; ++a) {
+        if (v[a] == nullptr || v[a]->Size() != myBsize)
+            return -1;
+        data[a] = dataOf(*v[a]);
     }
+    if (processID != 0)
+        return dofExchange.recvLocal(*theChannels[0], data.data(), nv, nullptr, 0);
+    for (int j = 0; j < numChannels; ++j)
+        if (dofExchange.sendLocal(*theChannels[j], j, data.data(), nv, nullptr, 0) < 0)
+            return -1;
     return 0;
 }
 

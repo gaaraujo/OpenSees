@@ -615,10 +615,10 @@ int SparseExplicitAlpha::newStep(double _deltaT)
         return -5;  // joined rank 0's alpha solve
     }
     if (distSOE != nullptr) {
-        // Broadcast the predicted kinematics so workers share rank 0's predictor result.
-        if (distSOE->broadcastFromRoot(*U) < 0 || distSOE->broadcastFromRoot(*Udot) < 0 ||
-            distSOE->broadcastFromRoot(*Udotdot) < 0 || distSOE->broadcastFromRoot(*Ualpha) < 0 ||
-            distSOE->broadcastFromRoot(*Ualphadot) < 0 || distSOE->broadcastFromRoot(*Ualphadotdot) < 0) {
+        // Send the predicted kinematics so workers share rank 0's predictor result: each worker
+        // receives only the entries of its own DOFs (all it reads), in one message.
+        Vector *motion[6] = {U, Udot, Udotdot, Ualpha, Ualphadot, Ualphadotdot};
+        if (distSOE->scatterLocalFromRoot(motion, 6) < 0) {
             opserr << "ERROR SparseExplicitAlpha::newStep() - motion broadcast failed\n";
             return -5;
         }
@@ -685,6 +685,7 @@ int SparseExplicitAlpha::formUnbalance()
         if (status(0) < 0.0)
             return -2;
         distSOE->setGlobalRhsReady(true);
+        distSOE->setLocalSolution(true);  // update() reads X only at this rank's DOFs
         return 0;
     }
 
