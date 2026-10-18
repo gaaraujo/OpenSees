@@ -298,6 +298,8 @@ MumpsParallelSOE::setSize(Graph &theGraph)
       colA[count++] = i;
   }
 
+  assemblyStructureChanged();
+
   LinearSOESolver *theSolvr = this->getSolver();
 
   int solverOK = theSolvr->setSize();
