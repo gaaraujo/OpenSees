@@ -92,6 +92,7 @@ UmfpackGenLinSOE::setSize(Graph &theGraph)
     }
 
     // resize A, B, X (clear the pattern first: setSize is called again after a domain change)
+    assemblyCache.clear();
     Ap.clear();
     Ai.clear();
     Ap.reserve(size+1);
@@ -163,50 +164,24 @@ UmfpackGenLinSOE::addA(const Matrix &m, const ID &id, double fact)
 	return -1;
     }
 
-    int size = X.Size();
-    if (fact == 1.0) { // do not need to multiply
-	for (int j=0; j<idSize; j++) {
-	    int col = id(j);
-	    if (col<0 || col>=size) {
-		continue;
-	    }
-	    for (int i=0; i<idSize; i++) {
-		int row = id(i);
-		if (row<0 || row>=size) {
-		    continue;
-		}
-
-		// find place in A
-		for (int k=Ap[col]; k<Ap[col+1]; k++) {
-		    if (Ai[k] == row) {
-			Ax[k] += m(i,j);
-			break;
-		    }
-		}
-	    }
-	}
-    } else {
-	for (int j=0; j<idSize; j++) {
-	    int col = id(j);
-	    if (col<0 || col>=X.Size()) {
-		continue;
-	    }
-	    for (int i=0; i<idSize; i++) {
-		int row = id(i);
-		if (row<0 || row>=X.Size()) {
-		    continue;
-		}
-
-		// find place in A
-		for (int k=Ap[col]; k<Ap[col+1]; k++) {
-		    if (Ai[k] == row) {
-			Ax[k] += fact*m(i,j);
-			break;
-		    }
-		}
-	    }
-	}
-    }
+    // A is stored by columns (Ap, Ai sorted within each column). The first assembly
+    // locates each entry by bisection and records its slot; later assemblies replay the
+    // slots. The entries are visited column by column, as before.
+    const int size = X.Size();
+    auto find = [&](int a, int b) -> int {
+	const int col = id(a);
+	const int row = id(b);
+	if (col < 0 || col >= size || row < 0 || row >= size)
+	    return SparseSlotCache::SKIP;
+	const int *begin = Ai.data() + Ap[col];
+	const int *end = Ai.data() + Ap[col+1];
+	const int *it = std::lower_bound(begin, end, row);
+	if (it != end && *it == row)
+	    return static_cast<int>(it - Ai.data());
+	return SparseSlotCache::SKIP;
+    };
+    assemblyCache.setCapacity(8 * Ax.size() + (std::size_t(1) << 20));
+    addWithCache(assemblyCache, m, id, fact, true, find, [&]() { return Ax.data(); });
 
     return 0;
 }
@@ -284,6 +259,7 @@ UmfpackGenLinSOE::setB(const Vector &v, double fact)
 void
 UmfpackGenLinSOE::zeroA(void)
 {
+    assemblyCache.rewind();
     Ax.assign(Ax.size(),0.0);
     factored = false;
 }
