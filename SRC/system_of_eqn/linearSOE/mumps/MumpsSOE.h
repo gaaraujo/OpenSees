@@ -40,6 +40,7 @@
 // What: "@(#) MumpsSOE.h, revA"
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 
 class MumpsSolver;
@@ -89,6 +90,11 @@ class MumpsSOE : public LinearSOE
     int Asize, Bsize;    // size of the 1d array holding A
     bool factored;
     int matType;
+
+    // Value slots of addA() entries, in call order; rowA sorted within each column.
+    SparseSlotCache assemblyCache;
+    bool rowsSorted = false;
+    void assemblyStructureChanged(void);
 
   private:
 };
