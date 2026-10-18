@@ -36,6 +36,7 @@
 #define UmfpackGenLinSOE_h
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 #include <vector>
 
@@ -82,6 +83,7 @@ private:
     Vector X,B;
     std::vector<int> Ap, Ai;
     std::vector<double> Ax;
+    SparseSlotCache assemblyCache;  // value slots of addA() entries, in call order
 };
 
 

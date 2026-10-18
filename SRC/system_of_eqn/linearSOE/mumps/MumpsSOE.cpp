@@ -279,6 +279,8 @@ MumpsSOE::setSize(Graph &theGraph)
     for (int k=colStartA[i]; k<colStartA[i+1]; k++)
       colA[count++] = i;
   
+  assemblyStructureChanged();
+
   // invoke setSize() on the Solver    
   LinearSOESolver *the_Solver = this->getSolver();
   int solverOK = the_Solver->setSize();
@@ -289,6 +291,19 @@ MumpsSOE::setSize(Graph &theGraph)
   }    
   
   return result;
+}
+
+void
+MumpsSOE::assemblyStructureChanged(void)
+{
+  assemblyCache.clear();
+  rowsSorted = true;
+  for (int c=0; c<size && rowsSorted; c++)
+    for (int k=colStartA[c]+1; k<colStartA[c+1]; k++)
+      if (rowA[k-1] >= rowA[k]) {
+	rowsSorted = false;
+	break;
+      }
 }
 
 int 
@@ -307,94 +322,24 @@ MumpsSOE::addA(const Matrix &m, const ID &id, double fact)
 	return -1;
     }
 
-    if (matType != 0) {
-
-      if (fact == 1.0) { // do not need to multiply 
-	for (int i=0; i<idSize; i++) {
-	  int col = id(i);
-	  if (col < size && col >= 0) {
-	    int startColLoc = colStartA[col];
-	    int endColLoc = colStartA[col+1];
-	    
-	    for (int j=0; j<idSize; j++) {
-	      int row = id(j);
-	      if (row >= col && row < size && row >= 0) {
-		// find place in A using rowA
-		for (int k=startColLoc; k<endColLoc; k++)
-		  if (rowA[k] == row) {
-		    A[k] += m(j,i);
-		    k = endColLoc;
-		  }
-	      }
-	    }  // for j		
-	  } 
-	}  // for i
-      } else {
-	for (int i=0; i<idSize; i++) {
-	  int col = id(i);
-	  if (col < size && col >= 0) {
-	    int startColLoc = colStartA[col];
-	    int endColLoc = colStartA[col+1];
-
-	    for (int j=0; j<idSize; j++) {
-	      int row = id(j);
-	      if (row >= col && row <size && row >= 0) {
-		// find place in A using rowA
-		for (int k=startColLoc; k<endColLoc; k++)
-		  if (rowA[k] == row) {
-		    A[k] += fact * m(j,i);
-		    k = endColLoc;
-		  }
-	      }
-	    }  // for j		
-	  } 
-	}  // for i
-      }
-
-
-    } else {
-    
-      if (fact == 1.0) { // do not need to multiply 
-	for (int i=0; i<idSize; i++) {
-	  int col = id(i);
-	  if (col < size && col >= 0) {
-	    int startColLoc = colStartA[col];
-	    int endColLoc = colStartA[col+1];
-
-	    for (int j=0; j<idSize; j++) {
-	      int row = id(j);
-	      if (row <size && row >= 0) {
-		// find place in A using rowA
-		for (int k=startColLoc; k<endColLoc; k++)
-		  if (rowA[k] == row) {
-		    A[k] += m(j,i);
-		    k = endColLoc;
-		  }
-	      }
-	    }  // for j		
-	  } 
-	}  // for i
-      } else {
-	for (int i=0; i<idSize; i++) {
-	  int col = id(i);
-	  if (col < size && col >= 0) {
-	    int startColLoc = colStartA[col];
-	    int endColLoc = colStartA[col+1];
-	    for (int j=0; j<idSize; j++) {
-	      int row = id(j);
-	      if (row <size && row >= 0) {
-		// find place in A using rowA
-		for (int k=startColLoc; k<endColLoc; k++)
-		  if (rowA[k] == row) {
-		    A[k] += fact * m(j,i);
-		    k = endColLoc;
-		  }
-	      }
-	    }  // for j		
-	  } 
-	}  // for i
-      }
-    }
+    // A is stored by columns (colStartA, rowA). The first assembly locates each entry
+    // in its column (bisection when the rows are sorted, as setSize builds them) and
+    // records its slot; later assemblies replay the slots. The entries are visited
+    // column by column, as before; matType != 0 keeps the lower triangle (row >= col).
+    auto find = [&](int a, int b) -> int {
+	const int col = id(a);
+	const int row = id(b);
+	if (col < 0 || col >= size || row < 0 || row >= size || (matType != 0 && row < col))
+	    return SparseSlotCache::SKIP;
+	const int *begin = rowA + colStartA[col];
+	const int *end = rowA + colStartA[col+1];
+	const int *it = rowsSorted ? std::lower_bound(begin, end, row) : std::find(begin, end, row);
+	if (it != end && *it == row)
+	    return static_cast<int>(it - rowA);
+	return SparseSlotCache::SKIP;
+    };
+    assemblyCache.setCapacity(8 * static_cast<std::size_t>(nnz) + (std::size_t(1) << 20));
+    addWithCache(assemblyCache, m, id, fact, true, find, [&]() { return A; });
 
     return 0;
 }
@@ -471,6 +416,7 @@ MumpsSOE::setB(const Vector &v, double fact)
 void 
 MumpsSOE::zeroA(void)
 {
+    assemblyCache.rewind();
     double *Aptr = A;
     for (int i=0; i<nnz; i++)
 	*Aptr++ = 0;
