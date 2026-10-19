@@ -11,7 +11,8 @@
 // are parallel as in `system Mumps`; the matrix and the right-hand sides are centralized on rank 0
 // (the MUMPS host, which owns the operator), and the other ranks join each call with no data.
 // Otherwise (SparseCSR) MUMPS runs on MPI_COMM_SELF. Unsymmetric, with the ordering and workspace
-// defaults of `system Mumps` (ICNTL(7) = 7, ICNTL(14) = 20); several right-hand sides in one call.
+// defaults of `system Mumps` (ICNTL(7) = 7, ICNTL(14) = 20, ICNTL(23) = 0); several right-hand sides in one
+// call. OPS_MUMPS_CSR_ICNTL14 / OPS_MUMPS_CSR_ICNTL23 override the workspace relaxation / working memory.
 // Compiled only into executables that link MUMPS; the interpreter calls OPS_RegisterMumpsCsrBackend()
 // before creating a SparseCSR system.
 
@@ -106,6 +107,7 @@ public:
             m_id.job = 2;
             dmumps_c(&m_id);
         }
+        reportMemory();
         return report("factorization");
     }
 
@@ -146,6 +148,23 @@ private:
         // global INFOG, so all ranks must start from the same ICNTL(14).
         const char *icntl14 = std::getenv("OPS_MUMPS_CSR_ICNTL14");
         m_id.ICNTL(14) = icntl14 ? std::atoi(icntl14) : 20;
+        // Working memory per process in MB (0 = MUMPS's own estimate, the default); OPS_MUMPS_CSR_ICNTL23
+        // overrides it, read on every rank like ICNTL(14).
+        const char *icntl23 = std::getenv("OPS_MUMPS_CSR_ICNTL23");
+        m_id.ICNTL(23) = icntl23 ? std::atoi(icntl23) : 0;
+        m_reportMemory = icntl23 != nullptr;
+    }
+
+    // With OPS_MUMPS_CSR_ICNTL23 set, the host prints the settings and the memory the factorization used.
+    void reportMemory() const
+    {
+        if (!m_reportMemory || !isHost())
+            return;
+        opserr << "CsrMatrix (Mumps) - ICNTL(14) = " << m_id.ICNTL(14) << ", ICNTL(23) = " << m_id.ICNTL(23)
+               << " MB; INFOG(1) = " << m_id.infog[0] << "; MB, max per process / total: estimated "
+               << m_id.infog[15] << " / " << m_id.infog[16] << " (INFOG(16)/(17)), allocated " << m_id.infog[17]
+               << " / " << m_id.infog[18] << " (INFOG(18)/(19)), used " << m_id.infog[20] << " / "
+               << m_id.infog[21] << " (INFOG(21)/(22))\n";
     }
 
     int report(const char *phase) const
@@ -165,6 +184,7 @@ private:
     DMUMPS_STRUC_C m_id;
     bool m_init = false;
     bool m_analyzed = false;
+    bool m_reportMemory = false;
     int m_n = 0;
     std::vector<MUMPS_INT> m_irn, m_jcn;
     std::vector<double> m_a;
