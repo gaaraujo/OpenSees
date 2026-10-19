@@ -12,7 +12,8 @@
 // (the MUMPS host, which owns the operator), and the other ranks join each call with no data.
 // Otherwise (SparseCSR) MUMPS runs on MPI_COMM_SELF. Unsymmetric, with the ordering and workspace
 // defaults of `system Mumps` (ICNTL(7) = 7, ICNTL(14) = 20, ICNTL(23) = 0); several right-hand sides in one
-// call. OPS_MUMPS_CSR_ICNTL14 / OPS_MUMPS_CSR_ICNTL23 override the workspace relaxation / working memory.
+// call. OPS_MUMPS_CSR_ICNTL14 / OPS_MUMPS_CSR_ICNTL23 / OPS_MUMPS_CSR_ICNTL24 override the workspace
+// relaxation / working memory / null-pivot detection; OPS_MUMPS_CSR_REPORT prints factorizations and solves.
 // Compiled only into executables that link MUMPS; the interpreter calls OPS_RegisterMumpsCsrBackend()
 // before creating a SparseCSR system.
 
@@ -22,6 +23,8 @@
 #include <OPS_Globals.h>
 #include <mpi.h>
 #include <dmumps_c.h>
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -37,6 +40,8 @@ public:
     {
         // Collective over the ranks of the communicator: every rank creates its backend at the same
         // point (CsrMatrix creates it lazily in factorize(), which all ranks call in the same order).
+        static int s_count = 0;  // creation order, to tell the operators apart in the diagnostic output
+        m_tag = s_count++;
         MPI_Comm_dup(distributed ? MPI_COMM_WORLD : MPI_COMM_SELF, &m_comm);
         MPI_Comm_rank(m_comm, &m_rank);
         std::memset(&m_id, 0, sizeof(m_id));
@@ -108,6 +113,7 @@ public:
             dmumps_c(&m_id);
         }
         reportMemory();
+        reportFactorization();
         return report("factorization");
     }
 
@@ -128,8 +134,19 @@ public:
             m_id.nrhs = numRhs;
             m_id.lrhs = n;
         }
+        double bNorm = 0.0;
+        if (m_report && isHost() && m_solveReports < 12)
+            bNorm = maxAbs(x, static_cast<std::size_t>(n) * numRhs, nullptr);
         m_id.job = 3;
         dmumps_c(&m_id);
+        if (m_report && isHost() && m_solveReports < 12) {
+            ++m_solveReports;
+            int nonFinite = 0;
+            const double xNorm = maxAbs(x, static_cast<std::size_t>(n) * numRhs, &nonFinite);
+            opserr << "CsrMatrix (Mumps) #" << m_tag << " solve " << m_solveReports << ": nrhs " << numRhs
+                   << ", max|b| " << bNorm << ", max|x| " << xNorm << ", non-finite x " << nonFinite
+                   << ", INFOG(1) " << m_id.infog[0] << "\n";
+        }
         return report("solve");
     }
 
@@ -153,6 +170,53 @@ private:
         const char *icntl23 = std::getenv("OPS_MUMPS_CSR_ICNTL23");
         m_id.ICNTL(23) = icntl23 ? std::atoi(icntl23) : 0;
         m_reportMemory = icntl23 != nullptr;
+        // Null-pivot detection (MUMPS ICNTL(24), default 0 = off); OPS_MUMPS_CSR_ICNTL24 sets it on every rank.
+        // With it, or with OPS_MUMPS_CSR_REPORT set, the host prints each factorization (INFOG(1), (2), (28)
+        // null pivots, matrix diagonal) and its first solves (max |b|, max |x|, non-finite entries of x).
+        const char *icntl24 = std::getenv("OPS_MUMPS_CSR_ICNTL24");
+        if (icntl24)
+            m_id.ICNTL(24) = std::atoi(icntl24);
+        m_report = icntl24 != nullptr || std::getenv("OPS_MUMPS_CSR_REPORT") != nullptr;
+    }
+
+    static double maxAbs(const double *v, std::size_t n, int *nonFinite)
+    {
+        double m = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!std::isfinite(v[i])) {
+                if (nonFinite)
+                    ++*nonFinite;
+                continue;
+            }
+            m = std::max(m, std::fabs(v[i]));
+        }
+        return m;
+    }
+
+    void reportFactorization() const
+    {
+        if (!m_report || !isHost())
+            return;
+        double aMax = 0.0, dMin = HUGE_VAL;
+        int zeroDiag = 0, nonFinite = 0, nDiag = 0;
+        for (std::size_t k = 0; k < m_a.size(); ++k) {
+            if (!std::isfinite(m_a[k]))
+                ++nonFinite;
+            else
+                aMax = std::max(aMax, std::fabs(m_a[k]));
+            if (m_irn[k] == m_jcn[k]) {
+                ++nDiag;
+                dMin = std::min(dMin, std::fabs(m_a[k]));
+                if (m_a[k] == 0.0)
+                    ++zeroDiag;
+            }
+        }
+        opserr << "CsrMatrix (Mumps) #" << m_tag << " factorization: n " << m_n << ", nnz " << m_a.size()
+               << ", max|a| " << aMax << ", stored diagonal " << nDiag << " (min |d| " << dMin << ", zero "
+               << zeroDiag << "), non-finite values " << nonFinite << "; ICNTL(14) " << m_id.ICNTL(14)
+               << ", ICNTL(24) " << m_id.ICNTL(24) << "; INFOG(1) " << m_id.infog[0] << ", INFOG(2) "
+               << m_id.infog[1] << ", INFOG(28) (null pivots) " << m_id.infog[27] << ", RINFOG(3) (flops) "
+               << m_id.rinfog[2] << "\n";
     }
 
     // With OPS_MUMPS_CSR_ICNTL23 set, the host prints the settings and the memory the factorization used.
@@ -185,6 +249,9 @@ private:
     bool m_init = false;
     bool m_analyzed = false;
     bool m_reportMemory = false;
+    bool m_report = false;
+    int m_tag = 0;
+    int m_solveReports = 0;
     int m_n = 0;
     std::vector<MUMPS_INT> m_irn, m_jcn;
     std::vector<double> m_a;
