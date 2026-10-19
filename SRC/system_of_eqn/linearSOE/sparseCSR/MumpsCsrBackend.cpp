@@ -216,8 +216,17 @@ private:
         // OPS_MUMPS_CSR_ZERO_DIAG=<prefix>: the 0-based rows whose stored diagonal is exactly zero go to
         // <prefix><tag>.txt (first factorization of each instance only).
         const char *zeroFile = std::getenv("OPS_MUMPS_CSR_ZERO_DIAG");
+        if (zeroFile && !m_zeroDumped) {
+            // the whole stored diagonal too (row value), to size a mass fix from the assembled masses
+            FILE *fd = std::fopen((std::string(zeroFile) + std::to_string(m_tag) + "_diag.txt").c_str(), "w");
+            if (fd) {
+                for (std::size_t k = 0; k < m_a.size(); ++k)
+                    if (m_irn[k] == m_jcn[k])
+                        std::fprintf(fd, "%d %.10g\n", m_irn[k] - 1, m_a[k]);
+                std::fclose(fd);
+            }
+        }
         if (zeroFile && zeroDiag > 0 && !m_zeroDumped) {
-            m_zeroDumped = true;
             FILE *f = std::fopen((std::string(zeroFile) + std::to_string(m_tag) + ".txt").c_str(), "w");
             if (f) {
                 for (std::size_t k = 0; k < m_a.size(); ++k)
@@ -226,6 +235,8 @@ private:
                 std::fclose(f);
             }
         }
+        if (zeroFile)
+            m_zeroDumped = true;
         opserr << "CsrMatrix (Mumps) #" << m_tag << " factorization: n " << m_n << ", nnz " << m_a.size()
                << ", max|a| " << aMax << ", stored diagonal " << nDiag << " (min |d| " << dMin << ", zero "
                << zeroDiag << "), non-finite values " << nonFinite << "; ICNTL(14) " << m_id.ICNTL(14)
