@@ -26,7 +26,9 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #define ICNTL(I) icntl[(I)-1] /* indices as in the MUMPS documentation */
@@ -193,7 +195,7 @@ private:
         return m;
     }
 
-    void reportFactorization() const
+    void reportFactorization()
     {
         if (!m_report || !isHost())
             return;
@@ -209,6 +211,19 @@ private:
                 dMin = std::min(dMin, std::fabs(m_a[k]));
                 if (m_a[k] == 0.0)
                     ++zeroDiag;
+            }
+        }
+        // OPS_MUMPS_CSR_ZERO_DIAG=<prefix>: the 0-based rows whose stored diagonal is exactly zero go to
+        // <prefix><tag>.txt (first factorization of each instance only).
+        const char *zeroFile = std::getenv("OPS_MUMPS_CSR_ZERO_DIAG");
+        if (zeroFile && zeroDiag > 0 && !m_zeroDumped) {
+            m_zeroDumped = true;
+            FILE *f = std::fopen((std::string(zeroFile) + std::to_string(m_tag) + ".txt").c_str(), "w");
+            if (f) {
+                for (std::size_t k = 0; k < m_a.size(); ++k)
+                    if (m_irn[k] == m_jcn[k] && m_a[k] == 0.0)
+                        std::fprintf(f, "%d\n", m_irn[k] - 1);
+                std::fclose(f);
             }
         }
         opserr << "CsrMatrix (Mumps) #" << m_tag << " factorization: n " << m_n << ", nnz " << m_a.size()
@@ -252,6 +267,7 @@ private:
     bool m_report = false;
     int m_tag = 0;
     int m_solveReports = 0;
+    bool m_zeroDumped = false;
     int m_n = 0;
     std::vector<MUMPS_INT> m_irn, m_jcn;
     std::vector<double> m_a;
