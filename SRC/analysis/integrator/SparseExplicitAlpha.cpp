@@ -22,6 +22,7 @@
 // Created: 10/2026
 
 #include <SparseExplicitAlpha.h>
+#include "PhaseTimers.h"  // PHASETIMERS
 #include <SparseCsrLinSOE.h>
 #include <DistributedSparseCsrLinSOE.h>
 #include <CsrMatrix.h>
@@ -596,6 +597,7 @@ int SparseExplicitAlpha::newStepPredictor(void)
 // Linear::solveCurrentStep then calls formUnbalance (equilibrium + RHS) and update (kinematics).
 int SparseExplicitAlpha::newStep(double _deltaT)
 {
+    ops_phase::mark(ops_phase::StepBegin);  // PHASETIMERS
     updateCount = 0;
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0)
         return -1;
@@ -609,6 +611,7 @@ int SparseExplicitAlpha::newStep(double _deltaT)
     if (validateSOE(csrSOE, distSOE) != 0)
         return -3;
     const bool root = isRoot(distSOE);
+    ops_phase::setRank(distSOE != nullptr ? distSOE->getProcessID() : 0);  // PHASETIMERS
     if (distSOE != nullptr)
         distSOE->setGlobalRhsReady(false);  // drop a flag left by a formUnbalance that never reached solve()
 
@@ -673,7 +676,10 @@ int SparseExplicitAlpha::newStep(double _deltaT)
         tStepStart = theModel->getCurrentDomainTime();
         theDomain->setCommittedTime(tStepStart + alphaF * deltaT - deltaT);
     }
-    if (theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT) < 0) {
+    ops_phase::mark(ops_phase::PredictDone);  // PHASETIMERS
+    const int opsPhaseRc = theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT);  // PHASETIMERS
+    ops_phase::mark(ops_phase::StateDetDone);  // PHASETIMERS
+    if (opsPhaseRc < 0) {
         opserr << "ERROR SparseExplicitAlpha::newStep() - updateDomain failed\n";
         return -6;
     }
@@ -707,6 +713,8 @@ int SparseExplicitAlpha::transformRhs(SparseCsrLinSOE *csrSOE)
 
 int SparseExplicitAlpha::formUnbalance()
 {
+    ops_phase::mark(ops_phase::UnbalBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_UnbalDone { ~OpsPhaseGuard_UnbalDone() { ops_phase::mark(ops_phase::UnbalDone); } } opsPhaseGuard_UnbalDone;  // PHASETIMERS
     SparseCsrLinSOE *csrSOE = nullptr;
     DistributedSparseCsrLinSOE *distSOE = nullptr;
     if (validateSOE(csrSOE, distSOE) != 0)
@@ -716,11 +724,13 @@ int SparseExplicitAlpha::formUnbalance()
 
     if (TransientIntegrator::formUnbalance() < 0)
         return -1;
+    ops_phase::mark(ops_phase::AssembleDone);  // PHASETIMERS
 
     if (distSOE != nullptr) {
         // Merge Phat to rank 0, clear the local RHS (no double count), transform on rank 0. The status
         // broadcast keeps every rank's global-RHS flag matched so the solve() collectives agree.
         int rc = distSOE->mergeBToRoot();
+        ops_phase::mark(ops_phase::MergeDone);  // PHASETIMERS
         if (rc == 0)
             distSOE->zeroB();
         if (isRoot(distSOE) && !areAlphaMFClose()) {
@@ -748,6 +758,8 @@ int SparseExplicitAlpha::formUnbalance()
 
 int SparseExplicitAlpha::update(const Vector &aiPlusOne)
 {
+    ops_phase::mark(ops_phase::UpdateBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_UpdateDone { ~OpsPhaseGuard_UpdateDone() { ops_phase::mark(ops_phase::UpdateDone); } } opsPhaseGuard_UpdateDone;  // PHASETIMERS
     updateCount++;
     if (updateCount > 1) {
         opserr << "ERROR SparseExplicitAlpha::update() - called " << updateCount
@@ -778,6 +790,8 @@ int SparseExplicitAlpha::update(const Vector &aiPlusOne)
 
 int SparseExplicitAlpha::commit()
 {
+    ops_phase::mark(ops_phase::CommitBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_CommitDone { ~OpsPhaseGuard_CommitDone() { ops_phase::mark(ops_phase::CommitDone); } } opsPhaseGuard_CommitDone;  // PHASETIMERS
     AnalysisModel *theModel = this->getAnalysisModel();
     if (theModel == nullptr)
         return -1;

@@ -43,6 +43,7 @@
 
 #include "CudaCsrMatrix.h"
 #include "CudaUtils.h"
+#include "PhaseTimers.h"  // PHASETIMERS
 #include <cuda_runtime.h>
 #include <cusparse.h>
 #include <thrust/device_vector.h>
@@ -1231,6 +1232,7 @@ int CudaExplicitAlpha::applyStartCorrection(CudaBcsrLinSOE *cudaSOE)
 // Linear::solveCurrentStep then formUnbalance (equilibrium + GPU RHS) and update (full kinematics).
 int CudaExplicitAlpha::newStep(double _deltaT)
 {
+    ops_phase::mark(ops_phase::StepBegin);  // PHASETIMERS
     updateCount = 0;
     if (alphaF < 0.5 || alphaF > 1.0 || beta <= 0.0 || gamma <= 0.0 || _deltaT <= 0.0) {
         return -1;
@@ -1260,6 +1262,7 @@ int CudaExplicitAlpha::newStep(double _deltaT)
     }
 
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
+    ops_phase::setRank(distSOE != nullptr ? distSOE->getProcessID() : 0);  // PHASETIMERS
     // Drop any leftover B-skip flag from a prior formUnbalance that never reached solve().
     if (distSOE != nullptr)
         distSOE->setGlobalRhsOnDevice(false);
@@ -1350,7 +1353,10 @@ int CudaExplicitAlpha::newStep(double _deltaT)
         tStepStart = theModel->getCurrentDomainTime();
         theDomain->setCommittedTime(tStepStart + alphaF * deltaT - deltaT);
     }
-    if (theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT) < 0) {
+    ops_phase::mark(ops_phase::PredictDone);  // PHASETIMERS
+    const int opsPhaseRc = theModel->updateDomain(theModel->getCurrentDomainTime() + alphaF * deltaT, deltaT);  // PHASETIMERS
+    ops_phase::mark(ops_phase::StateDetDone);  // PHASETIMERS
+    if (opsPhaseRc < 0) {
         opserr << "ERROR CudaExplicitAlpha::newStep() - updateDomain failed at t="
                << theModel->getCurrentDomainTime()
                << " (alphaF*dt trial), |Ualpha|=" << Ualpha->Norm()
@@ -1363,6 +1369,8 @@ int CudaExplicitAlpha::newStep(double _deltaT)
 
 int CudaExplicitAlpha::formUnbalance()
 {
+    ops_phase::mark(ops_phase::UnbalBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_UnbalDone { ~OpsPhaseGuard_UnbalDone() { ops_phase::mark(ops_phase::UnbalDone); } } opsPhaseGuard_UnbalDone;  // PHASETIMERS
     auto *distSOE = dynamic_cast<DistributedCudaBcsrLinSOE *>(this->getLinearSOE());
     if (distSOE != nullptr)
         distSOE->setGlobalRhsOnDevice(false);
@@ -1370,6 +1378,7 @@ int CudaExplicitAlpha::formUnbalance()
     if (TransientIntegrator::formUnbalance() < 0) {
         return -1;
     }
+    ops_phase::mark(ops_phase::AssembleDone);  // PHASETIMERS
     CudaBcsrLinSOE *cudaSOE = nullptr;
     if (validateCudaSOE(cudaSOE) != 0) {
         return -2;
@@ -1381,6 +1390,7 @@ int CudaExplicitAlpha::formUnbalance()
         // every rank's globalRhsOnDevice flag matched so DistCuDSS::solve collectives
         // cannot diverge on a root-only GPU failure.
         int rc = distSOE->mergeBToRoot();
+        ops_phase::mark(ops_phase::MergeDone);  // PHASETIMERS
         if (rc == 0)
             distSOE->zeroB();
 
@@ -1430,6 +1440,8 @@ int CudaExplicitAlpha::formUnbalance()
 
 int CudaExplicitAlpha::update(const Vector &aiPlusOne)
 {
+    ops_phase::mark(ops_phase::UpdateBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_UpdateDone { ~OpsPhaseGuard_UpdateDone() { ops_phase::mark(ops_phase::UpdateDone); } } opsPhaseGuard_UpdateDone;  // PHASETIMERS
     updateCount++;
     if (updateCount > 1) {
         opserr << "ERROR CudaExplicitAlpha::update() - called " << updateCount
@@ -1483,6 +1495,8 @@ int CudaExplicitAlpha::update(const Vector &aiPlusOne)
 
 int CudaExplicitAlpha::commit()
 {
+    ops_phase::mark(ops_phase::CommitBegin);  // PHASETIMERS
+    struct OpsPhaseGuard_CommitDone { ~OpsPhaseGuard_CommitDone() { ops_phase::mark(ops_phase::CommitDone); } } opsPhaseGuard_CommitDone;  // PHASETIMERS
     AnalysisModel *theModel = this->getAnalysisModel();
     if (theModel == nullptr) {
         return -1;
