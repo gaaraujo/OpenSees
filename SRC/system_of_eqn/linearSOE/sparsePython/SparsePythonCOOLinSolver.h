@@ -29,6 +29,7 @@ class SparsePythonCOOLinSolver : public LinearSOESolver
     int setLinearSOE(SparsePythonCOOLinSOE &theSOE);
     int setPythonCallable(PyObject *callable, const char *methodName = "solve");
     void setWritableFlags(const SparsePythonWritableFlags &flags) { writableFlags = flags; }
+    void setCallOptions(const SparsePythonCallOptions &options) { callOptions = options; }
 
     PyObject *getPythonCallable() const { return solverObject; }
     const std::string &getMethodName() const { return methodName; }
@@ -41,6 +42,7 @@ class SparsePythonCOOLinSolver : public LinearSOESolver
     PyObject *solverObject;
     std::string methodName;
     SparsePythonWritableFlags writableFlags;
+    SparsePythonCallOptions callOptions;
 };
 
 #endif /* SparsePythonCOOLinSolver_h */

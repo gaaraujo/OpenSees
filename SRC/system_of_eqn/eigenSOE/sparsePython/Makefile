@@ -5,7 +5,8 @@ OBJS       = SparsePythonCompressedEigenSOE.o \
 	SparsePythonCOOEigenSOE.o \
 	SparsePythonCOOEigenSolver.o \
 	SparsePythonEigenCommon.o \
-	SparsePythonEigenFactory.o
+	SparsePythonEigenFactory.o \
+	DistributedSparsePythonEigenSOE.o
 
 all:    $(OBJS)
 

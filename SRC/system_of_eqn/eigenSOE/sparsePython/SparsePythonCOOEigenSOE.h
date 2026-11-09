@@ -4,6 +4,7 @@
 #include "SparsePythonEigenCommon.h"
 
 #include <EigenSOE.h>
+#include <SparseAssemblyCache.h>
 
 #include <vector>
 
@@ -40,6 +41,10 @@ class SparsePythonCOOEigenSOE : public EigenSOE
     int setPythonSolver(SparsePythonCOOEigenSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const { return matrixStatus; }
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side: record equation count without building a sparse pattern. */
+    int resizeVectors(int size);
 
     const std::vector<int> &getRowIndices(void) const { return rowIndices; }
     const std::vector<int> &getColIndices(void) const { return colIndices; }
@@ -55,6 +60,8 @@ class SparsePythonCOOEigenSOE : public EigenSOE
   private:
     void buildCOOPattern(Graph &theGraph);
     void updateMatrixStatus();
+    int addToMatrix(SparseSlotCache &cache, std::vector<double> &values, const Matrix &m,
+                    const ID &id, double fact, const char *caller);
 
     std::vector<int> rowIndices;
     std::vector<int> colIndices;
@@ -62,6 +69,9 @@ class SparsePythonCOOEigenSOE : public EigenSOE
 
     std::vector<double> kValues;
     std::vector<double> mValues;
+
+    // Value slots of addA() / addM() entries, in call order (cleared when the pattern changes).
+    SparseSlotCache kCache, mCache;
 
     MatrixStatus matrixStatus;
 

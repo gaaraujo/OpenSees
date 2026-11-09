@@ -144,39 +144,26 @@ SparsePythonCompressedLinSolver::callPythonSolver()
     }
 
     // Build memoryviews that hand the raw SOE buffers to Python without copying.
-    const Py_ssize_t ptrBytes = static_cast<Py_ssize_t>(indexPtr.size() * sizeof(int));
-    const Py_ssize_t indBytes = static_cast<Py_ssize_t>(indices.size() * sizeof(int));
-    const Py_ssize_t valuesBytes = static_cast<Py_ssize_t>(values.size() * sizeof(double));
-    const Py_ssize_t rhsBytes = static_cast<Py_ssize_t>(rhs.size() * sizeof(double));
-    const Py_ssize_t solBytes = static_cast<Py_ssize_t>(sol.size() * sizeof(double));
-
-    PyObjectHolder pyPtr(PyMemoryView_FromMemory(
-        reinterpret_cast<char *>(const_cast<int *>(indexPtr.data())),
-        ptrBytes,
-        PyBUF_READ));
-
-    PyObjectHolder pyInd(PyMemoryView_FromMemory(
-        reinterpret_cast<char *>(const_cast<int *>(indices.data())),
-        indBytes,
-        PyBUF_READ));
-
-    PyObjectHolder pyValues(PyMemoryView_FromMemory(
-        reinterpret_cast<char *>(values.data()),
-        valuesBytes,
-        writableFlags.values ? PyBUF_WRITE : PyBUF_READ));
-
-    PyObjectHolder pyRhs(PyMemoryView_FromMemory(
-        reinterpret_cast<char *>(rhs.data()),
-        rhsBytes,
-        writableFlags.rhs ? PyBUF_WRITE : PyBUF_READ));
-
-    PyObjectHolder pySol(PyMemoryView_FromMemory(
-        reinterpret_cast<char *>(sol.data()),
-        solBytes,
-        PyBUF_WRITE));
+    const bool typed = callOptions.typedBuffers;
+    PyObjectHolder pyPtr(SparsePythonMakeView(
+        const_cast<int *>(indexPtr.data()), static_cast<Py_ssize_t>(indexPtr.size()),
+        sizeof(int), "i", false, typed));
+    PyObjectHolder pyInd(SparsePythonMakeView(
+        const_cast<int *>(indices.data()), static_cast<Py_ssize_t>(indices.size()),
+        sizeof(int), "i", false, typed));
+    PyObjectHolder pyValues(SparsePythonMakeView(
+        values.data(), static_cast<Py_ssize_t>(values.size()),
+        sizeof(double), "d", writableFlags.values, typed));
+    PyObjectHolder pyRhs(SparsePythonMakeView(
+        rhs.data(), static_cast<Py_ssize_t>(rhs.size()),
+        sizeof(double), "d", writableFlags.rhs, typed));
+    PyObjectHolder pySol(SparsePythonMakeView(
+        sol.data(), static_cast<Py_ssize_t>(sol.size()),
+        sizeof(double), "d", true, typed));
 
     if (pyPtr.get() == nullptr || pyInd.get() == nullptr ||
         pyValues.get() == nullptr || pyRhs.get() == nullptr || pySol.get() == nullptr) {
+        PyErr_Print();
         opserr << "SparsePythonCompressedLinSolver::callPythonSolver - failed to create memory views\n";
         PyGILState_Release(gilState);
         return -5;
@@ -226,6 +213,18 @@ SparsePythonCompressedLinSolver::callPythonSolver()
         return -7;
     }
 
+    // Opt-in keys are added only when requested, so solve() methods with an
+    // explicit signature written for OpenSees 3.8.0 keep working.
+    if (callOptions.passMatrixType) {
+        PyObjectHolder pyMatrixType(PyUnicode_FromString(theSOE->getMatrixType().to_str()));
+        if (pyMatrixType.get() == nullptr ||
+            PyDict_SetItemString(kwargs.get(), "matrix_type", pyMatrixType.get()) != 0) {
+            opserr << "SparsePythonCompressedLinSolver::callPythonSolver - failed to set matrix_type\n";
+            PyGILState_Release(gilState);
+            return -7;
+        }
+    }
+
     // The Python callable expects no positional args; we pass everything via kwargs.
     PyObject *args = PyTuple_New(0);
     if (args == nullptr) {
@@ -246,17 +245,7 @@ SparsePythonCompressedLinSolver::callPythonSolver()
         return -9;
     }
 
-    // Interpret the return value: None -> success, numeric -> explicit status code.
-    int status = 0;
-    if (result.get() != Py_None) {
-        if (PyLong_Check(result.get())) {
-            status = static_cast<int>(PyLong_AsLong(result.get()));
-        } else if (PyFloat_Check(result.get())) {
-            status = static_cast<int>(PyFloat_AsDouble(result.get()));
-        } else {
-            status = 0;
-        }
-    }
+    const int status = SparsePythonResultToStatus(result.get(), "SparsePythonCompressedLinSolver::solve");
 
     PyGILState_Release(gilState);
     return status;

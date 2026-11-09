@@ -57,6 +57,7 @@ class SparsePythonCompressedLinSolver : public LinearSOESolver
     int setLinearSOE(SparsePythonCompressedLinSOE &theSOE);
     int setPythonCallable(PyObject *callable, const char *methodName = "solve");
     void setWritableFlags(const SparsePythonWritableFlags &flags) { writableFlags = flags; }
+    void setCallOptions(const SparsePythonCallOptions &options) { callOptions = options; }
 
     PyObject *getPythonCallable() const { return solverObject; }
     const std::string &getMethodName() const { return methodName; }
@@ -69,5 +70,6 @@ class SparsePythonCompressedLinSolver : public LinearSOESolver
     PyObject *solverObject;
     std::string methodName;
     SparsePythonWritableFlags writableFlags;
+    SparsePythonCallOptions callOptions;
 };
 #endif /* SparsePythonCompressedLinSolver_h */

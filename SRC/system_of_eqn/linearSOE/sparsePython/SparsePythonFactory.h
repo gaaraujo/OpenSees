@@ -2,10 +2,14 @@
 #define SparsePythonFactory_h
 
 /**
- * Parse the `system PythonSparse` command and construct the corresponding SOE.
+ * Parse the `system PythonSparse` / `system DistributedPythonSparse` command
+ * and construct the corresponding SOE.
  *
  * Expected syntax:
- *   `system 'PythonSparse' {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', 'writable': 'values'|'rhs'|'values,rhs'|'all'|'none'}`
+ *   `system 'PythonSparse'|'DistributedPythonSparse' {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO', 'writable': 'values'|'rhs'|'values,rhs'|'all'|'none'}`
+ *
+ * For DistributedPythonSparse, rank 0 requires a Python solver object; workers
+ * may omit `solver` or pass None (they only assemble triplets / RHS).
  *
  * The supplied Python object must expose a `solve` method. When invoked the
  * solver receives memoryviews pointing directly to the SOE storage:

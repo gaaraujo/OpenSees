@@ -453,9 +453,10 @@ void PythonAnalysisBuilder::newEigenAnalysis(int typeSolver, double shift, Eigen
 	    theEigenSOE = new FullGenEigenSOE(*theEigenSolver, *theAnalysisModel);
 
 	} else if(typeSolver == EigenSOE_TAGS_SparsePythonCompressedEigenSOE ||
-	          typeSolver == EigenSOE_TAGS_SparsePythonCOOEigenSOE) {
+	          typeSolver == EigenSOE_TAGS_SparsePythonCOOEigenSOE ||
+	          typeSolver == EigenSOE_TAGS_DistributedSparsePythonEigenSOE) {
 	    // This case should not be reached here - should use providedEigenSOE instead
-	    opserr << "WARNING: PythonCompressedSparseEigenSOE should be created via factory function" << endln;
+	    opserr << "WARNING: PythonSparse EigenSOE should be created via factory function" << endln;
 	    theEigenSOE = new ArpackSOE(shift);
 	} else {
 	    theEigenSOE = new ArpackSOE(shift);    
@@ -1165,25 +1166,30 @@ PyObject *ops_eigenAnalysis(PyObject *self, PyObject *args)
     int numEigen = 0;
     EigenSOE *providedEigenSOE = nullptr;
 
-    // Check if first argument is "PythonSparse" - if so, expect numModes and dict
+    // Check if first argument is PythonSparse / DistributedPythonSparse
     std::string firstArg = OPS_GetString();
-    if (firstArg == "PythonSparse" || firstArg == "PythonCompressedSparseEigen") {
+    if (firstArg == "PythonSparse" || firstArg == "PythonCompressedSparseEigen" ||
+        firstArg == "DistributedPythonSparse") {
         // PythonSparse eigen solver - requires numModes as second argument, dict as third
-        // First get numModes
         int numData = 1;
         if(OPS_GetIntInput(&numData,&numEigen) < 0) {
             PyErr_SetString(PyExc_RuntimeError,"ERROR eigen('PythonSparse',numModes,dict) - invalid numModes");
             return NULL;
         }
-        
-        // Then get dict argument
+
+        extern void OPS_SetSparsePythonEigenDistributed(bool);
         extern void *OPS_SparsePythonEigenSolver();
+        OPS_SetSparsePythonEigenDistributed(firstArg == "DistributedPythonSparse");
         void *eigenSOEPtr = OPS_SparsePythonEigenSolver();
         if (eigenSOEPtr == NULL) {
             return NULL;
         }
         providedEigenSOE = static_cast<EigenSOE *>(eigenSOEPtr);
         typeSolver = providedEigenSOE->getClassTag();
+        // Note: processID/channels for DistributedPythonSparse are set in
+        // OPS_eigenAnalysis (PythonWrapper path). This legacy ops_eigenAnalysis
+        // path constructs the SOE; callers using OpenSeesMP should prefer
+        // the PythonWrapper eigen command.
     } else {
         // Traditional eigen analysis - parse type and numModes
         // check type of eigenvalue analysis

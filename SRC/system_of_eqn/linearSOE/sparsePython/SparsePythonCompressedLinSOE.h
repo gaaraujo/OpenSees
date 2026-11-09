@@ -31,6 +31,7 @@
 // associated SparsePythonCompressedLinSolver instance.
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 #include <vector>
 
@@ -50,12 +51,17 @@ class SparsePythonCompressedLinSOE : public LinearSOE
 
     using MatrixStatus = SparsePythonMatrixStatus;
 
+    using MatrixType = SparsePythonMatrixType;
+
     SparsePythonCompressedLinSOE(SparsePythonCompressedLinSolver &theSolver,
-                                 StorageScheme scheme = StorageScheme::CSR);
-    explicit SparsePythonCompressedLinSOE(StorageScheme scheme = StorageScheme::CSR);
+                                 StorageScheme scheme = StorageScheme::CSR,
+                                 MatrixType type = MatrixType::GENERAL);
+    explicit SparsePythonCompressedLinSOE(StorageScheme scheme = StorageScheme::CSR,
+                                          MatrixType type = MatrixType::GENERAL);
     ~SparsePythonCompressedLinSOE() override;
 
     StorageScheme getStorageScheme() const { return storageScheme; }
+    MatrixType getMatrixType() const { return theMatrixType; }
 
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;
@@ -81,6 +87,10 @@ class SparsePythonCompressedLinSOE : public LinearSOE
     int setPythonSolver(SparsePythonCompressedLinSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const;
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side resize: allocate X/B only (no sparse pattern). */
+    int resizeVectors(int size);
 
     const std::vector<int> &getIndexPtr(void) const { return indexPtr; }
     const std::vector<int> &getIndices(void) const { return indices; }
@@ -111,11 +121,15 @@ class SparsePythonCompressedLinSOE : public LinearSOE
     std::vector<double> rhs;
     std::vector<double> sol;
 
+    // Value slots of addA() entries, in call order (cleared when the pattern changes).
+    SparseSlotCache assemblyCache;
+
     Vector xVector;
     Vector bVector;
 
     MatrixStatus matrixStatus;
     StorageScheme storageScheme;
+    MatrixType theMatrixType;
 
     friend class SparsePythonCompressedLinSolver;
 };

@@ -4,6 +4,7 @@
 #include "SparsePythonCommon.h"
 
 #include <LinearSOE.h>
+#include <SparseAssemblyCache.h>
 #include <Vector.h>
 
 #include <vector>
@@ -20,11 +21,15 @@ class SparsePythonCOOLinSOE : public LinearSOE
   public:
     using MatrixStatus = SparsePythonMatrixStatus;
 
-    explicit SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver);
-    SparsePythonCOOLinSOE();
+    using MatrixType = SparsePythonMatrixType;
+
+    explicit SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver,
+                                   MatrixType type = MatrixType::GENERAL);
+    explicit SparsePythonCOOLinSOE(MatrixType type = MatrixType::GENERAL);
     ~SparsePythonCOOLinSOE() override;
 
     SparsePythonStorageScheme getStorageScheme() const { return SparsePythonStorageScheme::COO; }
+    MatrixType getMatrixType() const { return theMatrixType; }
 
     int getNumEqn(void) const override;
     int setSize(Graph &theGraph) override;
@@ -50,6 +55,10 @@ class SparsePythonCOOLinSOE : public LinearSOE
     int setPythonSolver(SparsePythonCOOLinSolver &newSolver);
 
     MatrixStatus getMatrixStatus(void) const { return matrixStatus; }
+    void setMatrixStatus(MatrixStatus status) { matrixStatus = status; }
+
+    /** Worker-side resize: allocate X/B only (no sparse pattern). */
+    int resizeVectors(int size);
 
     const std::vector<int> &getRowIndices(void) const { return rowIndices; }
     const std::vector<int> &getColIndices(void) const { return colIndices; }
@@ -72,12 +81,16 @@ class SparsePythonCOOLinSOE : public LinearSOE
     std::vector<double> rhs;
     std::vector<double> sol;
 
+    // Value slots of addA() entries, in call order (cleared when the pattern changes).
+    SparseSlotCache assemblyCache;
+
     std::vector<int> rowOffsets;
 
     Vector xVector;
     Vector bVector;
 
     MatrixStatus matrixStatus;
+    MatrixType theMatrixType;
 
     friend class SparsePythonCOOLinSolver;
 };

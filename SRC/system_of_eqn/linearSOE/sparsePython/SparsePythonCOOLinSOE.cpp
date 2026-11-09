@@ -14,17 +14,20 @@
 #include <algorithm>
 #include <cmath>
 
-SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver)
+SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(SparsePythonCOOLinSolver &theSolver,
+                                             MatrixType type)
     : LinearSOE(theSolver, LinSOE_TAGS_SparsePythonCOOLinSOE),
-      matrixStatus(MatrixStatus::STRUCTURE_CHANGED)
+      matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
+      theMatrixType(type)
 {
     theSolver.setLinearSOE(*this);
     updateVectorViews();
 }
 
-SparsePythonCOOLinSOE::SparsePythonCOOLinSOE()
+SparsePythonCOOLinSOE::SparsePythonCOOLinSOE(MatrixType type)
     : LinearSOE(LinSOE_TAGS_SparsePythonCOOLinSOE),
-      matrixStatus(MatrixStatus::STRUCTURE_CHANGED)
+      matrixStatus(MatrixStatus::STRUCTURE_CHANGED),
+      theMatrixType(type)
 {
     updateVectorViews();
 }
@@ -40,6 +43,7 @@ SparsePythonCOOLinSOE::getNumEqn(void) const
 void
 SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
 {
+    assemblyCache.clear();
     const int size = theGraph.getNumVertex();
     if (size < 0) {
         opserr << "WARNING: SparsePythonCOOLinSOE::buildCOOPattern - invalid graph size" << endln;
@@ -66,6 +70,7 @@ SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
 
     std::size_t last = 0;
     rowOffsets[0] = 0;
+    const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
 
     Vertex *theVertex = nullptr;
     for (int row = 0; row < size; ++row) {
@@ -91,7 +96,12 @@ SparsePythonCOOLinSOE::buildCOOPattern(Graph &theGraph)
             columns.insert(adjacency(i));
         }
 
+        // Entries are ordered by row, then column (ID::insert keeps columns
+        // sorted), so addA can locate them by binary search.
         for (int i = 0; i < columns.Size(); ++i) {
+            if (lower && columns(i) > row) {
+                continue;
+            }
             rowIndices[last] = row;
             colIndices[last] = columns(i);
             ++last;
@@ -127,6 +137,26 @@ SparsePythonCOOLinSOE::setSize(Graph &theGraph)
 }
 
 int
+SparsePythonCOOLinSOE::resizeVectors(int size)
+{
+    if (size < 0) {
+        opserr << "WARNING: SparsePythonCOOLinSOE::resizeVectors - size < 0\n";
+        return -1;
+    }
+
+    assemblyCache.clear();
+    rowOffsets.clear();
+    rowIndices.clear();
+    colIndices.clear();
+    values.clear();
+    rhs.assign(static_cast<std::size_t>(size), 0.0);
+    sol.assign(static_cast<std::size_t>(size), 0.0);
+    updateVectorViews();
+    matrixStatus = MatrixStatus::STRUCTURE_CHANGED;
+    return 0;
+}
+
+int
 SparsePythonCOOLinSOE::addA(const Matrix &m, const ID &id, double fact)
 {
     if (fact == 0.0) {
@@ -144,55 +174,26 @@ SparsePythonCOOLinSOE::addA(const Matrix &m, const ID &id, double fact)
         return 0;
     }
 
-    if (fact == 1.0) {
-        for (int i = 0; i < idSize; ++i) {
-            const int row = id(i);
-            if (row < 0 || row >= size) {
-                continue;
-            }
-
-            const int start = rowOffsets[static_cast<std::size_t>(row)];
-            const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                for (int k = start; k < end; ++k) {
-                    if (colIndices[static_cast<std::size_t>(k)] == col) {
-                        values[static_cast<std::size_t>(k)] += m(i, j);
-                        break;
-                    }
-                }
-            }
+    const bool lower = (theMatrixType == MatrixType::SYMMETRIC_LOWER);
+    auto colBegin = colIndices.begin();
+    // Binary search within the row the first time; later assemblies replay the
+    // cached slots.
+    auto find = [&](int i, int j) -> int {
+        const int row = id(i);
+        const int col = id(j);
+        if (row < 0 || row >= size || col < 0 || col >= size || (lower && col > row)) {
+            return SparseSlotCache::SKIP;
         }
-    } else {
-        for (int i = 0; i < idSize; ++i) {
-            const int row = id(i);
-            if (row < 0 || row >= size) {
-                continue;
-            }
-
-            const int start = rowOffsets[static_cast<std::size_t>(row)];
-            const int end = rowOffsets[static_cast<std::size_t>(row + 1)];
-
-            for (int j = 0; j < idSize; ++j) {
-                const int col = id(j);
-                if (col < 0 || col >= size) {
-                    continue;
-                }
-
-                for (int k = start; k < end; ++k) {
-                    if (colIndices[static_cast<std::size_t>(k)] == col) {
-                        values[static_cast<std::size_t>(k)] += fact * m(i, j);
-                        break;
-                    }
-                }
-            }
+        auto beginIt = colBegin + rowOffsets[static_cast<std::size_t>(row)];
+        auto endIt = colBegin + rowOffsets[static_cast<std::size_t>(row + 1)];
+        auto it = std::lower_bound(beginIt, endIt, col);
+        if (it != endIt && *it == col) {
+            return static_cast<int>(it - colBegin);
         }
-    }
+        return SparseSlotCache::SKIP;
+    };
+    assemblyCache.setCapacity(8 * values.size() + (std::size_t(1) << 20));
+    addWithCache(assemblyCache, m, id, fact, false, find, [&]() { return values.data(); });
 
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;
@@ -248,6 +249,7 @@ SparsePythonCOOLinSOE::setB(const Vector &v, double fact)
 void
 SparsePythonCOOLinSOE::zeroA(void)
 {
+    assemblyCache.rewind();
     std::fill(values.begin(), values.end(), 0.0);
     if (matrixStatus != MatrixStatus::STRUCTURE_CHANGED) {
         matrixStatus = MatrixStatus::COEFFICIENTS_CHANGED;

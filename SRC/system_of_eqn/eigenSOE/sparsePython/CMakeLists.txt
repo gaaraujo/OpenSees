@@ -6,6 +6,7 @@ target_sources(OPS_SysOfEqnPython
     SparsePythonCOOEigenSolver.cpp
     SparsePythonEigenCommon.cpp
     SparsePythonEigenFactory.cpp
+    DistributedSparsePythonEigenSOE.cpp
   PUBLIC
     SparsePythonCompressedEigenSOE.h
     SparsePythonCompressedEigenSolver.h
@@ -13,8 +14,8 @@ target_sources(OPS_SysOfEqnPython
     SparsePythonCOOEigenSolver.h
     SparsePythonEigenCommon.h
     SparsePythonEigenFactory.h
+    DistributedSparsePythonEigenSOE.h
 )
 
 find_package(Python3 COMPONENTS Development REQUIRED)
 target_link_libraries(OPS_SysOfEqnPython PRIVATE Python3::Python)
-

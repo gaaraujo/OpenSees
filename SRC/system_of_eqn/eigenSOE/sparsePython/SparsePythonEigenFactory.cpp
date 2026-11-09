@@ -1,5 +1,6 @@
 #include "SparsePythonEigenFactory.h"
 
+#include "DistributedSparsePythonEigenSOE.h"
 #include "SparsePythonCompressedEigenSOE.h"
 #include "SparsePythonCompressedEigenSolver.h"
 #include "SparsePythonCOOEigenSOE.h"
@@ -18,21 +19,7 @@
 
 namespace {
 
-bool
-IsSparsePythonEigenType(const char *type)
-{
-    return strcmp(type, "PythonSparse") == 0 ||
-           strcmp(type, "PythonCompressedSparseEigen") == 0;
-}
-
-std::string
-ToLower(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return value;
-}
+bool g_sparsePythonEigenDistributed = false;
 
 bool
 ParseSchemeToken(const char *token, SparsePythonEigenStorageScheme &scheme)
@@ -40,7 +27,10 @@ ParseSchemeToken(const char *token, SparsePythonEigenStorageScheme &scheme)
     if (token == nullptr) {
         return false;
     }
-    std::string normalized = ToLower(token);
+    std::string normalized(token);
+    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
     if (normalized == "csr" || normalized == "row") {
         scheme = SparsePythonEigenStorageScheme::CSR;
         return true;
@@ -58,25 +48,38 @@ ParseSchemeToken(const char *token, SparsePythonEigenStorageScheme &scheme)
 
 } // namespace
 
+void
+OPS_SetSparsePythonEigenDistributed(bool distributed)
+{
+    g_sparsePythonEigenDistributed = distributed;
+}
+
 void *
 OPS_SparsePythonEigenSolver()
 {
-    const char *expectedSyntax = "eigen 'PythonSparse' numModes {'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO'}";
+    const char *expectedSyntax =
+        "eigen 'PythonSparse'|'DistributedPythonSparse' numModes "
+        "{'solver': SolverObject, 'scheme': 'CSR'|'CSC'|'COO'}";
 
-    // Note: This function is called AFTER numModes has been read in PythonAnalysisBuilder.cpp
-    // So we don't need to reset or read the type string again - just get the dict argument
+    // Note: This function is called AFTER numModes has been read by the caller.
+    // Call OPS_SetSparsePythonEigenDistributed(true) before invoking for
+    // DistributedPythonSparse so workers may omit the Python solver object.
 
     if (!Py_IsInitialized()) {
         Py_Initialize();
     }
 
-    // Ensure GIL is held for all Python API calls
     PyGILState_STATE gilState = PyGILState_Ensure();
 
-    // Get the dictionary argument (should be the next argument after numModes)
+    const bool distributed = g_sparsePythonEigenDistributed;
+    // Reset so a subsequent serial eigen call does not inherit the flag.
+    g_sparsePythonEigenDistributed = false;
+
+    const char *typeName = distributed ? "DistributedPythonSparse" : "PythonSparse";
+
     void *dictPtr = OPS_GetVoidPtr();
     if (dictPtr == nullptr) {
-        opserr << "WARNING: eigen PythonSparse - requires a dictionary argument as third parameter" << endln;
+        opserr << "WARNING: eigen " << typeName << " - requires a dictionary argument as third parameter" << endln;
         opserr << "Expected syntax: " << expectedSyntax << endln;
         PyGILState_Release(gilState);
         return nullptr;
@@ -84,33 +87,34 @@ OPS_SparsePythonEigenSolver()
 
     PyObject *dict = static_cast<PyObject *>(dictPtr);
     if (!PyDict_Check(dict)) {
-        opserr << "WARNING: eigen PythonSparse - third argument must be a dictionary" << endln;
+        opserr << "WARNING: eigen " << typeName << " - third argument must be a dictionary" << endln;
         opserr << "Expected syntax: " << expectedSyntax << endln;
         PyGILState_Release(gilState);
         return nullptr;
     }
 
-    // Extract 'solver' (required)
     PyObject *solverObj = PyDict_GetItemString(dict, "solver");
-    if (solverObj == nullptr) {
-        opserr << "WARNING: eigen PythonSparse - dictionary must contain 'solver' key" << endln;
+    if (solverObj == Py_None) {
+        solverObj = nullptr;
+    }
+    if (!distributed && solverObj == nullptr) {
+        opserr << "WARNING: eigen " << typeName << " - dictionary must contain 'solver' key" << endln;
         opserr << "Expected syntax: " << expectedSyntax << endln;
         PyGILState_Release(gilState);
         return nullptr;
     }
 
-    // Extract 'scheme' (optional, defaults to CSR)
     SparsePythonEigenStorageScheme scheme = SparsePythonEigenStorageScheme::CSR;
     PyObject *schemeObj = PyDict_GetItemString(dict, "scheme");
     if (schemeObj != nullptr) {
         if (!PyUnicode_Check(schemeObj)) {
-            opserr << "WARNING: eigen PythonSparse - 'scheme' must be a string" << endln;
+            opserr << "WARNING: eigen " << typeName << " - 'scheme' must be a string" << endln;
             PyGILState_Release(gilState);
             return nullptr;
         }
         const char *schemeStr = PyUnicode_AsUTF8(schemeObj);
         if (schemeStr == nullptr || !ParseSchemeToken(schemeStr, scheme)) {
-            opserr << "WARNING: eigen PythonSparse - unknown storage scheme '"
+            opserr << "WARNING: eigen " << typeName << " - unknown storage scheme '"
                    << (schemeStr != nullptr ? schemeStr : "null") << "' (expected CSR, CSC, or COO)" << endln;
             PyGILState_Release(gilState);
             return nullptr;
@@ -119,30 +123,37 @@ OPS_SparsePythonEigenSolver()
 
     void *result = nullptr;
     if (scheme == SparsePythonEigenStorageScheme::COO) {
-        SparsePythonCOOEigenSolver *solver = new SparsePythonCOOEigenSolver();
-        if (solver->setPythonCallable(solverObj, "solve") != 0) {
-            opserr << "WARNING: eigen PythonSparse - failed to set Python callable" << endln;
-            delete solver;
-            PyGILState_Release(gilState);
-            return nullptr;
+        if (solverObj == nullptr) {
+            result = new SparsePythonCOOEigenSOE();
+        } else {
+            SparsePythonCOOEigenSolver *solver = new SparsePythonCOOEigenSolver();
+            if (solver->setPythonCallable(solverObj, "solve") != 0) {
+                opserr << "WARNING: eigen " << typeName << " - failed to set Python callable" << endln;
+                delete solver;
+                PyGILState_Release(gilState);
+                return nullptr;
+            }
+            result = new SparsePythonCOOEigenSOE(*solver);
         }
-        SparsePythonCOOEigenSOE *soe = new SparsePythonCOOEigenSOE(*solver);
-        result = static_cast<void *>(soe);
     } else {
-        SparsePythonCompressedEigenSolver *solver = new SparsePythonCompressedEigenSolver();
-        if (solver->setPythonCallable(solverObj, "solve") != 0) {
-            opserr << "WARNING: eigen PythonSparse - failed to set Python callable" << endln;
-            delete solver;
-            PyGILState_Release(gilState);
-            return nullptr;
+        if (solverObj == nullptr) {
+            result = new SparsePythonCompressedEigenSOE(scheme);
+        } else {
+            SparsePythonCompressedEigenSolver *solver = new SparsePythonCompressedEigenSolver();
+            if (solver->setPythonCallable(solverObj, "solve") != 0) {
+                opserr << "WARNING: eigen " << typeName << " - failed to set Python callable" << endln;
+                delete solver;
+                PyGILState_Release(gilState);
+                return nullptr;
+            }
+            result = new SparsePythonCompressedEigenSOE(*solver, scheme);
         }
+    }
 
-        SparsePythonCompressedEigenSOE *soe = new SparsePythonCompressedEigenSOE(*solver, scheme);
-        result = static_cast<void *>(soe);
+    if (result != nullptr && distributed) {
+        result = new DistributedSparsePythonEigenSOE(static_cast<EigenSOE *>(result));
     }
 
     PyGILState_Release(gilState);
     return result;
 }
-
-

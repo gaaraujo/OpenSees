@@ -37,6 +37,7 @@
 #include <NodeIter.h>
 #include <Message.h>
 #include <Channel.h>
+#include <vector>
 
 
 #ifdef _PARALLEL_PROCESSING
