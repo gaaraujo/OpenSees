@@ -265,6 +265,10 @@ OpenSeesCommands::OpenSeesCommands(DL_Interpreter* interp)
     theMachineBroker = new MPI_MachineBroker(&theBroker, 0, 0);
     int rank = theMachineBroker->getPID();
     int np = theMachineBroker->getNP();
+    {   // rank for code shared with the Tcl interpreters (e.g. OPS_DistributedCudaDirectSparseSolver)
+        extern int OPS_rank;
+        OPS_rank = rank;
+    }
     if (rank == 0) {
         theChannels = new Channel *[np-1];
         numChannels = np-1;

@@ -179,6 +179,10 @@ PythonModule::getDouble(double *data, int numArgs) {
     return 0;
 }
 
+// Defined by the Tcl interpreters in tcl/commands.cpp; OpenSeesPy defines it here (0 = serial, set to the MPI
+// rank by OpenSeesCommands under _PARALLEL_INTERPRETERS) for code shared with them, e.g. the CUDA solvers.
+int OPS_rank = 0;
+
 int PythonModule::getDoubleList(int* size, Vector* data)
 {
     if (wrapper.getCurrentArg() >= wrapper.getNumberArgs()) {
