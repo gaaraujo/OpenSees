@@ -162,6 +162,11 @@ private:
         m_id.ICNTL(5) = 0;   // assembled input
         m_id.ICNTL(18) = 0;  // centralized on the host
         m_id.ICNTL(7) = 7;   // automatic ordering
+        // Sequential ordering (MUMPS ICNTL(7): 4 = PORD, 5 = METIS, 7 = automatic); OPS_MUMPS_CSR_ICNTL7 overrides
+        // the default 7, read on every rank like ICNTL(14).
+        const char *icntl7 = std::getenv("OPS_MUMPS_CSR_ICNTL7");
+        if (icntl7)
+            m_id.ICNTL(7) = std::atoi(icntl7);
         // Starting workspace relaxation (percent); OPS_MUMPS_CSR_ICNTL14 overrides the default 20. Read on
         // every rank (setControls runs in each rank's constructor): the retry loop in factorize() reads the
         // global INFOG, so all ranks must start from the same ICNTL(14).
