@@ -648,6 +648,12 @@ if(CMAKE_CUDA_COMPILER)
     set(CMAKE_CUDA_COMPILER_WORKS TRUE)
   endif()
   enable_language(CUDA)
+  # The GNU branch above sets CMAKE_EXE_LINKER_FLAGS "-static-libgcc -static-libstdc++" before CUDA is
+  # enabled, so CMake's CUDA link detection records the static libstdc++.a among the implicit CUDA link
+  # libraries. Shared targets linked as CUDA (the OpenSeesPy module) then carry a private libstdc++ that
+  # crashes on the first opserr output under mpiexec with two or more ranks. Drop it: executables still
+  # get the static libstdc++ from -static-libstdc++, shared targets the compiler's shared libstdc++.
+  list(FILTER CMAKE_CUDA_IMPLICIT_LINK_LIBRARIES EXCLUDE REGEX "libstdc[+][+][.]a$")
   if(WIN32)
     # Shared cudart avoids static device registration at process start.
     set(CMAKE_CUDA_RUNTIME_LIBRARY Shared CACHE STRING
